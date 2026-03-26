@@ -9,6 +9,9 @@ import {
   ShieldCheck, 
   MessageSquare,
   Search,
+  MapPin,
+  AtSign,
+  Phone,
   Cpu,
   Monitor,
   Database,
@@ -19,7 +22,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-type View = 'home' | 'shop';
+type View = 'home' | 'shop' | 'support';
 
 interface Product {
   id: number;
@@ -67,13 +70,24 @@ export default function App() {
         </div>
         <div className="hidden md:flex items-center gap-10">
           <button 
+            onClick={() => setView('home')}
+            className={`text-sm font-medium transition-colors pb-1 ${view === 'home' ? 'text-[#aac7ff] border-b-2 border-[#aac7ff]' : 'text-slate-400 hover:text-slate-100'}`}
+          >
+            Home
+          </button>
+          <button 
             onClick={() => setView('shop')}
             className={`text-sm font-medium transition-colors pb-1 ${view === 'shop' ? 'text-[#aac7ff] border-b-2 border-[#aac7ff]' : 'text-slate-400 hover:text-slate-100'}`}
           >
             Shop
           </button>
           <button className="text-slate-400 hover:text-slate-100 transition-colors text-sm font-medium">Discover</button>
-          <button className="text-slate-400 hover:text-slate-100 transition-colors text-sm font-medium">Support</button>
+          <button 
+            onClick={() => setView('support')}
+            className={`text-sm font-medium transition-colors pb-1 ${view === 'support' ? 'text-[#aac7ff] border-b-2 border-[#aac7ff]' : 'text-slate-400 hover:text-slate-100'}`}
+          >
+            Support
+          </button>
           <button className="text-slate-400 hover:text-slate-100 transition-colors text-sm font-medium">Pre-order</button>
         </div>
         <div className="flex items-center gap-6">
@@ -110,8 +124,10 @@ export default function App() {
       <AnimatePresence mode="wait">
         {view === 'home' ? (
           <Home key="home" onShopClick={() => setView('shop')} />
-        ) : (
+        ) : view === 'shop' ? (
           <Shop key="shop" onAddToCart={addToCart} />
+        ) : (
+          <Support key="support" />
         )}
       </AnimatePresence>
 
@@ -160,7 +176,7 @@ export default function App() {
           </div>
         </div>
         <div className="pt-12 border-t border-white/5 text-center text-xs opacity-50">
-          © 2024 Havtel Technology. Engineered for Excellence.
+          Copyright © 2025 HAVTEL CORP. All Rights Reserved.
         </div>
       </footer>
 
@@ -559,4 +575,122 @@ function Shop({ onAddToCart }: { onAddToCart: (name: string) => void; key?: stri
   );
 }
 
+
+function Support() {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="pt-20 min-h-screen bg-[#11161c]"
+    >
+      <section className="relative overflow-hidden px-8 md:px-24 py-20 md:py-28">
+        <div className="absolute inset-0">
+          <div className="absolute top-12 left-0 w-[520px] h-[520px] bg-[#aac7ff]/10 rounded-full blur-[140px]"></div>
+          <div className="absolute bottom-0 right-0 w-[460px] h-[460px] bg-[#3e90ff]/8 rounded-full blur-[120px]"></div>
+        </div>
+
+        <div className="relative z-10 max-w-4xl mb-16 md:mb-20">
+          <span className="text-xs uppercase tracking-[0.35em] text-[#aac7ff] font-bold mb-6 block">Connect With Excellence</span>
+          <h1 className="text-5xl md:text-7xl lg:text-8xl font-black tracking-tighter mb-8 text-slate-100 leading-[0.95] drop-shadow-[0_0_20px_rgba(170,199,255,0.15)]">
+            How can we help you?
+          </h1>
+          <p className="text-lg md:text-2xl text-slate-400 max-w-3xl leading-relaxed">
+            Welcome to HAVTEL CORP. Here you'll find the best technology solutions on the market. Place your order with confidence and connect with our team for fast, reliable assistance.
+          </p>
+        </div>
+
+        <div className="relative z-10 grid grid-cols-1 xl:grid-cols-[minmax(0,1.35fr)_420px] gap-10 xl:gap-16 items-start">
+          <div className="rounded-[32px] border border-white/5 bg-gradient-to-br from-[#20252d] via-[#1c2129] to-[#161b22] p-6 md:p-10 shadow-[0_30px_80px_rgba(0,0,0,0.35)]">
+            <div className="grid grid-cols-1 gap-8">
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">Full Identity</span>
+                <input
+                  type="text"
+                  placeholder="Enter your name"
+                  className="w-full rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">Digital Coordinates</span>
+                <input
+                  type="email"
+                  placeholder="email@address.com"
+                  className="w-full rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">Inquiry Details</span>
+                <textarea
+                  placeholder="How may we assist you today?"
+                  rows={6}
+                  className="w-full resize-none rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                />
+              </label>
+
+              <div className="pt-2">
+                <button className="inline-flex items-center gap-3 rounded-2xl bg-gradient-to-br from-[#aac7ff] to-[#3e90ff] px-8 py-5 text-lg font-bold text-[#003064] shadow-[0_12px_35px_rgba(62,144,255,0.25)] transition-all hover:scale-[1.02] hover:shadow-[0_20px_45px_rgba(62,144,255,0.35)] active:scale-[0.99]">
+                  Send Message
+                  <ArrowRight size={20} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            {[
+              {
+                icon: MapPin,
+                title: 'Global Headquarters',
+                lines: ['2531 NW 72nd Ave unit A', 'Miami, FL 33122', 'United States'],
+              },
+              {
+                icon: AtSign,
+                title: 'Electronic Mail',
+                lines: ['sales@havtel.com'],
+              },
+              {
+                icon: Phone,
+                title: 'Technical Line',
+                lines: ['786-332-4868', 'Monday - Friday 9AM - 05:00 PM'],
+              },
+            ].map((item) => (
+              <div key={item.title} className="flex gap-5 rounded-[28px] border border-white/5 bg-white/[0.03] p-5 md:p-6 backdrop-blur-sm">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/5 text-[#aac7ff]">
+                  <item.icon size={22} />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold tracking-tight text-slate-100 mb-3">{item.title}</h3>
+                  <div className="space-y-1 text-lg text-slate-400">
+                    {item.lines.map((line) => (
+                      <p key={line}>{line}</p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            <div className="relative overflow-hidden rounded-[32px] border border-white/5 bg-gradient-to-br from-white/10 via-white/[0.06] to-transparent min-h-[260px] p-8">
+              <div className="absolute inset-0 opacity-25" style={{
+                backgroundImage: 'linear-gradient(rgba(255,255,255,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.07) 1px, transparent 1px)',
+                backgroundSize: '24px 24px'
+              }}></div>
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(170,199,255,0.12),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(62,144,255,0.14),transparent_30%)]"></div>
+              <div className="absolute left-[15%] top-[20%] w-3 h-3 rounded-full bg-[#aac7ff]/60"></div>
+              <div className="absolute right-[20%] top-[28%] w-2 h-2 rounded-full bg-white/40"></div>
+              <div className="absolute left-[55%] bottom-[24%] w-3 h-3 rounded-full bg-[#3e90ff]/50"></div>
+              <div className="relative z-10 flex h-full min-h-[196px] items-center justify-center">
+                <button className="rounded-full border border-[#aac7ff]/35 bg-[#7288b4]/30 px-8 py-4 text-lg font-medium text-[#cfe0ff] backdrop-blur-md transition-all hover:bg-[#7f96c6]/40">
+                  Miami Location
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </motion.div>
+  );
+}
 
