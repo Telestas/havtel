@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { 
   ShoppingCart, 
   User, 
+  CircleUserRound,
   ArrowRight, 
   ChevronRight, 
   Globe, 
@@ -10,19 +11,26 @@ import {
   MessageSquare,
   Search,
   MapPin,
+  Mail,
   AtSign,
   Phone,
+  Pencil,
+  Trash2,
+  IdCard,
+  Eye,
   Cpu,
   Monitor,
   Database,
   HardDrive,
   MousePointer2,
   ChevronLeft,
+  Package,
+  LogOut,
   Send
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-type View = 'home' | 'shop' | 'support';
+type View = 'home' | 'shop' | 'support' | 'account' | 'orders';
 
 interface Product {
   id: number;
@@ -51,12 +59,36 @@ export default function App() {
   const [view, setView] = useState<View>('home');
   const [cartCount, setCartCount] = useState(0);
   const [notification, setNotification] = useState<string | null>(null);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   const addToCart = (productName: string) => {
     setCartCount(prev => prev + 1);
     setNotification(`Added ${productName} to cart`);
     setTimeout(() => setNotification(null), 3000);
   };
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!userMenuRef.current?.contains(event.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsUserMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#101419] text-[#e0e2ea] font-sans selection:bg-[#aac7ff]/30 antialiased">
@@ -99,9 +131,66 @@ export default function App() {
               </span>
             )}
           </button>
-          <button className="text-slate-400 hover:text-slate-100 transition-colors p-2 rounded-full hover:bg-white/5">
-            <User size={20} />
-          </button>
+          <div className="relative" ref={userMenuRef}>
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={isUserMenuOpen}
+              aria-label="Open account menu"
+              onClick={() => setIsUserMenuOpen((prev) => !prev)}
+              className={`transition-colors p-2 rounded-full hover:bg-white/5 ${isUserMenuOpen ? 'text-slate-100 bg-white/5' : 'text-slate-400 hover:text-slate-100'}`}
+            >
+              <User size={20} />
+            </button>
+
+            <AnimatePresence>
+              {isUserMenuOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                  transition={{ duration: 0.16, ease: 'easeOut' }}
+                  className="absolute right-0 top-[calc(100%+12px)] z-[70] w-52 rounded-2xl border border-white/10 bg-[#161b22]/95 p-2 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+                >
+                  <div className="space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setView('account');
+                        setIsUserMenuOpen(false);
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-white/6 hover:text-white"
+                    >
+                      <CircleUserRound size={18} className="text-slate-400" />
+                      <span>My Account</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setView('orders');
+                        setIsUserMenuOpen(false);
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-white/6 hover:text-white"
+                    >
+                      <Package size={18} className="text-slate-400" />
+                      <span>Orders</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setView('home');
+                        setIsUserMenuOpen(false);
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-white/6 hover:text-white"
+                    >
+                      <LogOut size={18} className="text-slate-400" />
+                      <span>Sign Out</span>
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
       </nav>
 
@@ -126,6 +215,10 @@ export default function App() {
           <Home key="home" onShopClick={() => setView('shop')} />
         ) : view === 'shop' ? (
           <Shop key="shop" onAddToCart={addToCart} />
+        ) : view === 'orders' ? (
+          <OrderHistory key="orders" onBackToAccount={() => setView('account')} onGoHome={() => setView('home')} />
+        ) : view === 'account' ? (
+          <Account key="account" onExit={() => setView('home')} onOpenOrders={() => setView('orders')} />
         ) : (
           <Support key="support" />
         )}
@@ -576,6 +669,584 @@ function Shop({ onAddToCart }: { onAddToCart: (name: string) => void; key?: stri
 }
 
 
+function Account({ onExit, onOpenOrders }: { onExit: () => void; onOpenOrders: () => void; key?: string }) {
+  const [selectedSection, setSelectedSection] = useState<string | null>(null);
+  const [personalForm, setPersonalForm] = useState({
+    firstName: '',
+    lastName: '',
+    phone: '',
+    email: '',
+  });
+  const [showDeliveryForm, setShowDeliveryForm] = useState(false);
+  const [editingContactId, setEditingContactId] = useState<number | null>(null);
+  const [deliveryForm, setDeliveryForm] = useState({
+    email: '',
+    phone: '',
+    address: '',
+    ci: '',
+  });
+  const [deliveryContacts, setDeliveryContacts] = useState([
+    {
+      id: 1,
+      email: 'procurement@northstar.io',
+      phone: '+1 (786) 332-4868',
+      address: '2531 NW 72nd Ave Unit A, Miami, FL 33122',
+      ci: 'A1429087',
+    },
+  ]);
+
+  const accountSections = [
+    {
+      id: 'personal',
+      title: 'Personal Information',
+      description: 'Review and update your account identity, saved preferences, and billing basics.',
+      icon: CircleUserRound,
+    },
+    {
+      id: 'delivery',
+      title: 'Delivery Contacts',
+      description: 'Manage shipping recipients, addresses, and preferred drop-off instructions.',
+      icon: MapPin,
+    },
+    {
+      id: 'orders',
+      title: 'Order History & Details',
+      description: 'Track previous purchases, inspect order details, and follow current fulfillment.',
+      icon: Package,
+    },
+  ];
+
+  const resetDeliveryForm = () => {
+    setDeliveryForm({
+      email: '',
+      phone: '',
+      address: '',
+      ci: '',
+    });
+    setEditingContactId(null);
+    setShowDeliveryForm(false);
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="pt-20 min-h-screen bg-[#11161c]"
+    >
+      <section className="relative overflow-hidden px-8 md:px-24 py-20 md:py-28">
+        <div className="absolute inset-0">
+          <div className="absolute top-12 left-0 w-[520px] h-[520px] bg-[#aac7ff]/10 rounded-full blur-[140px]"></div>
+          <div className="absolute bottom-0 right-0 w-[460px] h-[460px] bg-[#3e90ff]/8 rounded-full blur-[120px]"></div>
+        </div>
+
+        <div className="relative z-10 max-w-4xl mb-16 md:mb-20">
+          <span className="text-xs uppercase tracking-[0.35em] text-[#aac7ff] font-bold mb-6 block">Account Center</span>
+          <h1 className="text-5xl md:text-7xl lg:text-8xl font-black tracking-tighter mb-8 text-slate-100 leading-[0.95] drop-shadow-[0_0_20px_rgba(170,199,255,0.15)]">
+            My Account
+          </h1>
+          <p className="text-lg md:text-2xl text-slate-400 max-w-3xl leading-relaxed">
+            Access your profile details, delivery contacts, and full order history from one streamlined control center.
+          </p>
+        </div>
+
+        <div className="relative z-10 grid grid-cols-1 xl:grid-cols-[minmax(0,1.35fr)_360px] gap-10 xl:gap-16 items-start">
+          <div className="space-y-8">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {accountSections.map((section) => (
+                <button
+                  key={section.title}
+                  type="button"
+                  onClick={() => {
+                    if (section.id === 'orders') {
+                      onOpenOrders();
+                      return;
+                    }
+
+                    setSelectedSection(section.id);
+                  }}
+                  className={`group text-left rounded-[28px] border p-6 md:p-8 shadow-[0_30px_80px_rgba(0,0,0,0.35)] transition-all hover:-translate-y-1 ${
+                    selectedSection === section.id
+                      ? 'border-[#aac7ff]/35 bg-gradient-to-br from-[#263242] via-[#1d2630] to-[#161b22]'
+                      : 'border-white/5 bg-gradient-to-br from-[#20252d] via-[#1c2129] to-[#161b22] hover:border-[#aac7ff]/20'
+                  }`}
+                >
+                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#aac7ff]/10 text-[#aac7ff] mb-8 group-hover:bg-[#aac7ff]/15">
+                    <section.icon size={28} />
+                  </div>
+                  <h2 className="text-2xl font-bold tracking-tight text-slate-100 mb-4">{section.title}</h2>
+                  <p className="text-slate-400 leading-relaxed">{section.description}</p>
+                </button>
+              ))}
+            </div>
+
+            {selectedSection === 'personal' && (
+              <div className="rounded-[32px] border border-[#aac7ff]/15 bg-gradient-to-br from-[#20252d] via-[#1c2129] to-[#161b22] p-6 md:p-10 shadow-[0_30px_80px_rgba(0,0,0,0.35)]">
+                <div className="mb-8">
+                  <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-3">Profile Details</span>
+                  <h3 className="text-3xl font-bold tracking-tight text-slate-100 mb-3">Personal Information</h3>
+                  <p className="text-slate-400">All fields are required before saving your profile details.</p>
+                </div>
+
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    setSelectedSection(null);
+                  }}
+                  className="grid grid-cols-1 md:grid-cols-2 gap-6"
+                >
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">First Name</span>
+                    <input
+                      required
+                      type="text"
+                      value={personalForm.firstName}
+                      onChange={(event) => setPersonalForm((prev) => ({ ...prev, firstName: event.target.value }))}
+                      placeholder="Enter your first name"
+                      className="w-full rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">Last Name</span>
+                    <input
+                      required
+                      type="text"
+                      value={personalForm.lastName}
+                      onChange={(event) => setPersonalForm((prev) => ({ ...prev, lastName: event.target.value }))}
+                      placeholder="Enter your last name"
+                      className="w-full rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">Phone</span>
+                    <input
+                      required
+                      type="tel"
+                      value={personalForm.phone}
+                      onChange={(event) => setPersonalForm((prev) => ({ ...prev, phone: event.target.value }))}
+                      placeholder="Enter your phone number"
+                      className="w-full rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">Email Address</span>
+                    <input
+                      required
+                      type="email"
+                      value={personalForm.email}
+                      onChange={(event) => setPersonalForm((prev) => ({ ...prev, email: event.target.value }))}
+                      placeholder="Enter your email address"
+                      className="w-full rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                    />
+                  </label>
+
+                  <div className="md:col-span-2 flex flex-col sm:flex-row gap-4 pt-2">
+                    <button
+                      type="submit"
+                      className="inline-flex items-center justify-center gap-3 rounded-2xl bg-gradient-to-br from-[#aac7ff] to-[#3e90ff] px-8 py-5 text-lg font-bold text-[#003064] shadow-[0_12px_35px_rgba(62,144,255,0.25)] transition-all hover:scale-[1.02] hover:shadow-[0_20px_45px_rgba(62,144,255,0.35)] active:scale-[0.99]"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSection(null)}
+                      className="inline-flex items-center justify-center rounded-2xl border border-white/10 px-8 py-5 text-lg font-bold text-slate-200 transition-all hover:bg-white/5"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {selectedSection === 'delivery' && (
+              <div className="rounded-[32px] border border-[#aac7ff]/15 bg-gradient-to-br from-[#20252d] via-[#1c2129] to-[#161b22] p-6 md:p-10 shadow-[0_30px_80px_rgba(0,0,0,0.35)]">
+                <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-8">
+                  <div>
+                    <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-3">Shipping Directory</span>
+                    <h3 className="text-3xl font-bold tracking-tight text-slate-100 mb-3">Delivery Contacts</h3>
+                    <p className="text-slate-400">Add and manage your saved delivery contacts from this section.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingContactId(null);
+                      setDeliveryForm({
+                        email: '',
+                        phone: '',
+                        address: '',
+                        ci: '',
+                      });
+                      setShowDeliveryForm(true);
+                    }}
+                    className="inline-flex items-center justify-center rounded-2xl bg-gradient-to-br from-[#aac7ff] to-[#3e90ff] px-6 py-4 text-base font-bold text-[#003064] shadow-[0_12px_35px_rgba(62,144,255,0.25)] transition-all hover:scale-[1.02] hover:shadow-[0_20px_45px_rgba(62,144,255,0.35)] active:scale-[0.99]"
+                  >
+                    Add Contact
+                  </button>
+                </div>
+
+                {showDeliveryForm && (
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+
+                      if (editingContactId !== null) {
+                        setDeliveryContacts((prev) =>
+                          prev.map((contact) =>
+                            contact.id === editingContactId ? { ...contact, ...deliveryForm } : contact
+                          )
+                        );
+                      } else {
+                        setDeliveryContacts((prev) => [
+                          ...prev,
+                          {
+                            id: Date.now(),
+                            ...deliveryForm,
+                          },
+                        ]);
+                      }
+
+                      resetDeliveryForm();
+                    }}
+                    className="grid grid-cols-1 md:grid-cols-2 gap-6 rounded-[28px] border border-white/5 bg-[#0f141b]/80 p-6 md:p-8 mb-8"
+                  >
+                    <label className="block">
+                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">Email</span>
+                      <input
+                        required
+                        type="email"
+                        value={deliveryForm.email}
+                        onChange={(event) => setDeliveryForm((prev) => ({ ...prev, email: event.target.value }))}
+                        placeholder="contact@email.com"
+                        className="w-full rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">Phone</span>
+                      <input
+                        required
+                        type="tel"
+                        value={deliveryForm.phone}
+                        onChange={(event) => setDeliveryForm((prev) => ({ ...prev, phone: event.target.value }))}
+                        placeholder="Enter phone number"
+                        className="w-full rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                      />
+                    </label>
+
+                    <label className="block md:col-span-2">
+                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">Address</span>
+                      <input
+                        required
+                        type="text"
+                        value={deliveryForm.address}
+                        onChange={(event) => setDeliveryForm((prev) => ({ ...prev, address: event.target.value }))}
+                        placeholder="Enter delivery address"
+                        className="w-full rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-4">CI</span>
+                      <input
+                        required
+                        type="text"
+                        value={deliveryForm.ci}
+                        onChange={(event) => setDeliveryForm((prev) => ({ ...prev, ci: event.target.value }))}
+                        placeholder="Enter CI"
+                        className="w-full rounded-2xl bg-[#0b1016] border border-white/5 px-6 py-5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40 focus:shadow-[0_0_0_4px_rgba(170,199,255,0.08)] transition-all"
+                      />
+                    </label>
+
+                    <div className="md:col-span-2 flex flex-col sm:flex-row gap-4 pt-2">
+                      <button
+                        type="submit"
+                        className="inline-flex items-center justify-center rounded-2xl bg-gradient-to-br from-[#aac7ff] to-[#3e90ff] px-8 py-5 text-lg font-bold text-[#003064] shadow-[0_12px_35px_rgba(62,144,255,0.25)] transition-all hover:scale-[1.02] hover:shadow-[0_20px_45px_rgba(62,144,255,0.35)] active:scale-[0.99]"
+                      >
+                        {editingContactId !== null ? 'Save Changes' : 'Save Contact'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={resetDeliveryForm}
+                        className="inline-flex items-center justify-center rounded-2xl border border-white/10 px-8 py-5 text-lg font-bold text-slate-200 transition-all hover:bg-white/5"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {deliveryContacts.map((contact) => (
+                    <div
+                      key={contact.id}
+                      className="rounded-[28px] border border-white/5 bg-white/[0.03] p-6 md:p-7 backdrop-blur-sm"
+                    >
+                      <div className="space-y-5">
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#aac7ff]/10 text-[#aac7ff]">
+                            <Mail size={20} />
+                          </div>
+                          <div>
+                            <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500 font-bold mb-2">Email</p>
+                            <p className="text-slate-200 break-all">{contact.email}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#aac7ff]/10 text-[#aac7ff]">
+                            <Phone size={20} />
+                          </div>
+                          <div>
+                            <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500 font-bold mb-2">Phone</p>
+                            <p className="text-slate-200">{contact.phone}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#aac7ff]/10 text-[#aac7ff]">
+                            <MapPin size={20} />
+                          </div>
+                          <div>
+                            <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500 font-bold mb-2">Address</p>
+                            <p className="text-slate-200">{contact.address}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#aac7ff]/10 text-[#aac7ff]">
+                            <IdCard size={20} />
+                          </div>
+                          <div>
+                            <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500 font-bold mb-2">CI</p>
+                            <p className="text-slate-200">{contact.ci}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row gap-4 pt-6 mt-6 border-t border-white/5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingContactId(contact.id);
+                            setDeliveryForm({
+                              email: contact.email,
+                              phone: contact.phone,
+                              address: contact.address,
+                              ci: contact.ci,
+                            });
+                            setShowDeliveryForm(true);
+                          }}
+                          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 px-5 py-4 text-sm font-bold text-slate-200 transition-all hover:bg-white/5"
+                        >
+                          <Pencil size={16} />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeliveryContacts((prev) => prev.filter((item) => item.id !== contact.id))}
+                          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#f87171]/20 bg-[#f87171]/8 px-5 py-4 text-sm font-bold text-[#ffb2b2] transition-all hover:bg-[#f87171]/14"
+                        >
+                          <Trash2 size={16} />
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-[32px] border border-white/5 bg-white/[0.03] p-6 md:p-8 backdrop-blur-sm shadow-[0_20px_60px_rgba(0,0,0,0.25)]">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#aac7ff] to-[#3e90ff] text-[#003064] flex items-center justify-center mb-8 shadow-[0_12px_35px_rgba(62,144,255,0.25)]">
+              <LogOut size={28} />
+            </div>
+            <h3 className="text-3xl font-bold tracking-tight text-slate-100 mb-4">Exit Account</h3>
+            <p className="text-slate-400 leading-relaxed mb-8">
+              Return to the homepage while keeping the same premium storefront experience.
+            </p>
+            <button
+              onClick={onExit}
+              className="inline-flex items-center gap-3 rounded-2xl bg-gradient-to-br from-[#aac7ff] to-[#3e90ff] px-8 py-5 text-lg font-bold text-[#003064] shadow-[0_12px_35px_rgba(62,144,255,0.25)] transition-all hover:scale-[1.02] hover:shadow-[0_20px_45px_rgba(62,144,255,0.35)] active:scale-[0.99]"
+            >
+              Exit to Home
+              <ArrowRight size={20} />
+            </button>
+          </div>
+        </div>
+      </section>
+    </motion.div>
+  );
+}
+
+
+function OrderHistory({
+  onBackToAccount,
+  onGoHome,
+}: {
+  onBackToAccount: () => void;
+  onGoHome: () => void;
+  key?: string;
+}) {
+  const orders = [
+    {
+      id: 'HV-2026-001',
+      date: 'March 12, 2026',
+      total: '$1,458.00',
+      paymentType: 'Credit Card',
+      status: 'Delivered',
+      details: '2 items shipped to Miami, FL. Tracking completed and signed at delivery.',
+    },
+    {
+      id: 'HV-2026-002',
+      date: 'March 07, 2026',
+      total: '$349.00',
+      paymentType: 'Bank Transfer',
+      status: 'Cancelled',
+      details: 'Order cancelled before fulfillment. Refund issued to the original payment method.',
+    },
+    {
+      id: 'HV-2026-003',
+      date: 'February 28, 2026',
+      total: '$2,094.00',
+      paymentType: 'PayPal',
+      status: 'Processing',
+      details: 'Warehouse confirmation completed. Final packaging and dispatch are in progress.',
+    },
+  ];
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(orders[0].id);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="pt-20 min-h-screen bg-[#11161c]"
+    >
+      <section className="relative overflow-hidden px-8 md:px-24 py-20 md:py-28">
+        <div className="absolute inset-0">
+          <div className="absolute top-12 left-0 w-[520px] h-[520px] bg-[#aac7ff]/10 rounded-full blur-[140px]"></div>
+          <div className="absolute bottom-0 right-0 w-[460px] h-[460px] bg-[#3e90ff]/8 rounded-full blur-[120px]"></div>
+        </div>
+
+        <div className="relative z-10 max-w-5xl mb-14 md:mb-16">
+          <span className="text-xs uppercase tracking-[0.35em] text-[#aac7ff] font-bold mb-6 block">Order Records</span>
+          <h1 className="text-5xl md:text-7xl font-black tracking-tighter mb-8 text-slate-100 leading-[0.95] drop-shadow-[0_0_20px_rgba(170,199,255,0.15)]">
+            Order History & Details
+          </h1>
+          <p className="text-lg md:text-2xl text-slate-400 max-w-4xl leading-relaxed">
+            Review your previous purchases, payment methods, fulfillment status, and order-level details from one place.
+          </p>
+        </div>
+
+        <div className="relative z-10 rounded-[32px] border border-white/5 bg-gradient-to-br from-[#20252d] via-[#1c2129] to-[#161b22] p-4 md:p-8 shadow-[0_30px_80px_rgba(0,0,0,0.35)]">
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left">
+              <thead>
+                <tr className="border-b border-white/8">
+                  <th className="px-4 py-4 text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold">Order No</th>
+                  <th className="px-4 py-4 text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold">Date</th>
+                  <th className="px-4 py-4 text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold">Total Price</th>
+                  <th className="px-4 py-4 text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold">Payment Type</th>
+                  <th className="px-4 py-4 text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold">Status</th>
+                  <th className="px-4 py-4 text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map((order) => (
+                  <tr key={order.id} className="border-b border-white/5 last:border-b-0">
+                    <td className="px-4 py-5 text-slate-100 font-semibold whitespace-nowrap">{order.id}</td>
+                    <td className="px-4 py-5 text-slate-300 whitespace-nowrap">{order.date}</td>
+                    <td className="px-4 py-5 text-slate-100 font-semibold whitespace-nowrap">{order.total}</td>
+                    <td className="px-4 py-5 text-slate-300 whitespace-nowrap">{order.paymentType}</td>
+                    <td className="px-4 py-5 whitespace-nowrap">
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${
+                          order.status === 'Delivered'
+                            ? 'bg-emerald-500/12 text-emerald-300'
+                            : order.status === 'Cancelled'
+                              ? 'bg-rose-500/12 text-rose-300'
+                              : 'bg-amber-500/12 text-amber-300'
+                        }`}
+                      >
+                        {order.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-5">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedOrderId(order.id)}
+                        className="inline-flex items-center gap-2 rounded-2xl border border-white/10 px-4 py-3 text-sm font-bold text-slate-200 transition-all hover:bg-white/5"
+                      >
+                        <Eye size={16} />
+                        Details
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-8 rounded-[28px] border border-white/5 bg-white/[0.03] p-6 md:p-8 backdrop-blur-sm">
+            {orders
+              .filter((order) => order.id === selectedOrderId)
+              .map((order) => (
+                <div key={order.id}>
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
+                    <div>
+                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#b5cbff] font-bold block mb-2">Selected Order</span>
+                      <h2 className="text-3xl font-bold tracking-tight text-slate-100">{order.id}</h2>
+                    </div>
+                    <span className="text-sm text-slate-400">Placed on {order.date}</span>
+                  </div>
+                  <p className="text-slate-300 leading-relaxed mb-6">{order.details}</p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="rounded-2xl border border-white/5 bg-[#0f141b]/80 p-5">
+                      <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500 font-bold mb-2">Payment</p>
+                      <p className="text-slate-100 font-semibold">{order.paymentType}</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/5 bg-[#0f141b]/80 p-5">
+                      <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500 font-bold mb-2">Total</p>
+                      <p className="text-slate-100 font-semibold">{order.total}</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/5 bg-[#0f141b]/80 p-5">
+                      <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500 font-bold mb-2">Status</p>
+                      <p className="text-slate-100 font-semibold">{order.status}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+          </div>
+
+          <div className="mt-8 flex flex-col sm:flex-row gap-4">
+            <button
+              type="button"
+              onClick={onBackToAccount}
+              className="inline-flex items-center justify-center rounded-2xl border border-white/10 px-8 py-5 text-lg font-bold text-slate-200 transition-all hover:bg-white/5"
+            >
+              Back to My Account
+            </button>
+            <button
+              type="button"
+              onClick={onGoHome}
+              className="inline-flex items-center justify-center gap-3 rounded-2xl bg-gradient-to-br from-[#aac7ff] to-[#3e90ff] px-8 py-5 text-lg font-bold text-[#003064] shadow-[0_12px_35px_rgba(62,144,255,0.25)] transition-all hover:scale-[1.02] hover:shadow-[0_20px_45px_rgba(62,144,255,0.35)] active:scale-[0.99]"
+            >
+              Home
+              <ArrowRight size={20} />
+            </button>
+          </div>
+        </div>
+      </section>
+    </motion.div>
+  );
+}
+
+
 function Support() {
   return (
     <motion.div
@@ -693,4 +1364,3 @@ function Support() {
     </motion.div>
   );
 }
-
