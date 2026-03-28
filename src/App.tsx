@@ -40,7 +40,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'review' | 'confirmed' | 'tracking' | 'product' | 'notfound';
+type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'review' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot';
 
 interface Product {
   id: number;
@@ -78,6 +78,7 @@ export default function App() {
   const [view, setView] = useState<View>('home');
   const [selectedProductId, setSelectedProductId] = useState<number>(1);
   const [notification, setNotification] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const [cartItems, setCartItems] = useState<CartItem[]>([
@@ -233,7 +234,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => {
-                        setView('account');
+                        setView(isAuthenticated ? 'account' : 'login');
                         setIsUserMenuOpen(false);
                       }}
                       className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-white/6 hover:text-white"
@@ -256,6 +257,7 @@ export default function App() {
                       type="button"
                       onClick={() => {
                         setView('home');
+                        setIsAuthenticated(false);
                         setIsUserMenuOpen(false);
                       }}
                       className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-white/6 hover:text-white"
@@ -297,6 +299,34 @@ export default function App() {
             window.location.hash = '';
             setView('home');
           }} />
+        ) : view === 'login' ? (
+          <AuthLoginView
+            key="login"
+            onLogin={() => {
+              setIsAuthenticated(true);
+              setView('account');
+            }}
+            onGoHome={() => setView('home')}
+            onGoToSignup={() => setView('signup')}
+            onGoToForgot={() => setView('forgot')}
+          />
+        ) : view === 'signup' ? (
+          <AuthSignupView
+            key="signup"
+            onSignup={() => {
+              setIsAuthenticated(true);
+              setView('account');
+            }}
+            onGoHome={() => setView('home')}
+            onGoToLogin={() => setView('login')}
+          />
+        ) : view === 'forgot' ? (
+          <AuthForgotView
+            key="forgot"
+            onSubmit={() => setView('login')}
+            onGoHome={() => setView('home')}
+            onGoToLogin={() => setView('login')}
+          />
         ) : view === 'shop' ? (
           <Shop key="shop" onAddToCart={addToCart} onProductSelect={openProduct} />
         ) : view === 'product' ? (
@@ -2147,6 +2177,169 @@ function NotFoundView({ onGoHome }: { onGoHome: () => void; key?: string }) {
                 <p className="mt-3 text-slate-400 leading-relaxed">{description}</p>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+    </motion.div>
+  );
+}
+
+function AuthLoginView({
+  onLogin,
+  onGoHome,
+  onGoToSignup,
+  onGoToForgot,
+}: {
+  onLogin: () => void;
+  onGoHome: () => void;
+  onGoToSignup: () => void;
+  onGoToForgot: () => void;
+  key?: string;
+}) {
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pt-20 min-h-screen bg-[#0f141b]">
+      <section className="relative overflow-hidden px-8 py-20 md:px-16">
+        <div className="absolute inset-0">
+          <div className="absolute left-[-8%] top-[12%] h-[420px] w-[420px] rounded-full bg-[#aac7ff]/10 blur-[140px]"></div>
+          <div className="absolute right-[-8%] bottom-[10%] h-[360px] w-[360px] rounded-full bg-[#3e90ff]/10 blur-[120px]"></div>
+        </div>
+        <div className="relative z-10 mx-auto grid max-w-6xl grid-cols-1 gap-10 xl:grid-cols-[0.95fr_520px]">
+          <div className="pt-8">
+            <span className="text-xs font-bold uppercase tracking-[0.34em] text-[#aac7ff]">Access Layer</span>
+            <h1 className="mt-6 text-6xl font-black tracking-tighter text-slate-100 md:text-7xl">Welcome Back</h1>
+            <p className="mt-6 max-w-2xl text-2xl leading-relaxed text-slate-400">
+              Sign in to manage your account center, delivery contacts, order history, and saved checkout flow.
+            </p>
+            <button type="button" onClick={onGoHome} className="mt-10 text-lg font-bold text-[#b9d1ff] hover:text-white">
+              Return Home
+            </button>
+          </div>
+          <div className="rounded-[32px] border border-white/5 bg-[#1b2129] p-8 shadow-[0_30px_80px_rgba(0,0,0,0.3)] md:p-10">
+            <h2 className="text-4xl font-black tracking-tight text-slate-100">Login</h2>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                onLogin();
+              }}
+              className="mt-8 space-y-6"
+            >
+              <label className="block">
+                <span className="mb-4 block text-sm font-bold uppercase tracking-[0.24em] text-slate-300">Email Address</span>
+                <input type="email" required placeholder="name@domain.tech" className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40" />
+              </label>
+              <label className="block">
+                <span className="mb-4 block text-sm font-bold uppercase tracking-[0.24em] text-slate-300">Password</span>
+                <input type="password" required placeholder="Enter your password" className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40" />
+              </label>
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <button type="button" onClick={onGoToForgot} className="font-bold text-[#b9d1ff] hover:text-white">Forgot password?</button>
+                <button type="button" onClick={onGoToSignup} className="font-bold text-slate-400 hover:text-white">Create account</button>
+              </div>
+              <button type="submit" className="w-full rounded-[22px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-5 text-xl font-bold text-[#03192f] shadow-[0_24px_60px_rgba(77,147,247,0.35)]">
+                Sign In
+              </button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </motion.div>
+  );
+}
+
+function AuthSignupView({
+  onSignup,
+  onGoHome,
+  onGoToLogin,
+}: {
+  onSignup: () => void;
+  onGoHome: () => void;
+  onGoToLogin: () => void;
+  key?: string;
+}) {
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pt-20 min-h-screen bg-[#0f141b]">
+      <section className="relative overflow-hidden px-8 py-20 md:px-16">
+        <div className="absolute inset-0">
+          <div className="absolute left-[5%] top-[14%] h-[320px] w-[320px] rounded-full bg-[#aac7ff]/10 blur-[120px]"></div>
+          <div className="absolute right-[0%] bottom-[10%] h-[380px] w-[380px] rounded-full bg-[#3e90ff]/8 blur-[120px]"></div>
+        </div>
+        <div className="relative z-10 mx-auto grid max-w-6xl grid-cols-1 gap-10 xl:grid-cols-[0.95fr_560px]">
+          <div className="pt-8">
+            <span className="text-xs font-bold uppercase tracking-[0.34em] text-[#aac7ff]">Identity Setup</span>
+            <h1 className="mt-6 text-6xl font-black tracking-tighter text-slate-100 md:text-7xl">Create Your Account</h1>
+            <p className="mt-6 max-w-2xl text-2xl leading-relaxed text-slate-400">
+              Join the Havtel ecosystem to save addresses, review orders, track shipments, and streamline future purchases.
+            </p>
+            <button type="button" onClick={onGoHome} className="mt-10 text-lg font-bold text-[#b9d1ff] hover:text-white">
+              Return Home
+            </button>
+          </div>
+          <div className="rounded-[32px] border border-white/5 bg-[#1b2129] p-8 shadow-[0_30px_80px_rgba(0,0,0,0.3)] md:p-10">
+            <h2 className="text-4xl font-black tracking-tight text-slate-100">Sign Up</h2>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                onSignup();
+              }}
+              className="mt-8 grid grid-cols-1 gap-6"
+            >
+              <input required placeholder="First name" className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40" />
+              <input required placeholder="Last name" className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40" />
+              <input required type="email" placeholder="Email address" className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40" />
+              <input required type="password" placeholder="Create password" className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40" />
+              <button type="submit" className="w-full rounded-[22px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-5 text-xl font-bold text-[#03192f] shadow-[0_24px_60px_rgba(77,147,247,0.35)]">
+                Create Account
+              </button>
+              <button type="button" onClick={onGoToLogin} className="text-sm font-bold text-[#b9d1ff] hover:text-white">
+                Already have an account? Sign in
+              </button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </motion.div>
+  );
+}
+
+function AuthForgotView({
+  onSubmit,
+  onGoHome,
+  onGoToLogin,
+}: {
+  onSubmit: () => void;
+  onGoHome: () => void;
+  onGoToLogin: () => void;
+  key?: string;
+}) {
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pt-20 min-h-screen bg-[#0f141b]">
+      <section className="relative overflow-hidden px-8 py-20 md:px-16">
+        <div className="absolute inset-0">
+          <div className="absolute left-[10%] top-[18%] h-[300px] w-[300px] rounded-full bg-[#aac7ff]/10 blur-[120px]"></div>
+        </div>
+        <div className="relative z-10 mx-auto max-w-3xl rounded-[32px] border border-white/5 bg-[#1b2129] p-8 shadow-[0_30px_80px_rgba(0,0,0,0.3)] md:p-10">
+          <h1 className="text-5xl font-black tracking-tighter text-slate-100">Reset Password</h1>
+          <p className="mt-5 text-xl leading-relaxed text-slate-400">
+            Enter your email address and we'll send recovery instructions to restore access to your Havtel account.
+          </p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmit();
+            }}
+            className="mt-8 space-y-6"
+          >
+            <label className="block">
+              <span className="mb-4 block text-sm font-bold uppercase tracking-[0.24em] text-slate-300">Email Address</span>
+              <input type="email" required placeholder="name@domain.tech" className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40" />
+            </label>
+            <button type="submit" className="w-full rounded-[22px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-5 text-xl font-bold text-[#03192f] shadow-[0_24px_60px_rgba(77,147,247,0.35)]">
+              Send Reset Link
+            </button>
+          </form>
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <button type="button" onClick={onGoToLogin} className="text-sm font-bold text-[#b9d1ff] hover:text-white">Back to Login</button>
+            <button type="button" onClick={onGoHome} className="text-sm font-bold text-slate-400 hover:text-white">Return Home</button>
           </div>
         </div>
       </section>
