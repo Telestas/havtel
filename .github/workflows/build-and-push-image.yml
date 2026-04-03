@@ -128,6 +128,7 @@ jobs:
                 ...version,
                 tags: version.metadata?.container?.tags ?? [],
               }))
+              .filter((version) => version.tags.length > 0)
               .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
             let keptTaggedVersion = false;
@@ -140,7 +141,7 @@ jobs:
                 continue;
               }
 
-              core.info(`Deleting package version ${version.id} with tags: ${version.tags.join(", ") || "(untagged)"}`);
+              core.info(`Deleting old tagged package version ${version.id} with tags: ${version.tags.join(", ")}`);
               await deleteVersion({
                 ...baseParams,
                 package_version_id: version.id,
