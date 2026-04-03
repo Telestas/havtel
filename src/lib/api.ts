@@ -1,4 +1,7 @@
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, '') ?? '';
+const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() ?? '';
+
+export const API_BASE_URL =
+  rawApiBaseUrl === '/' ? '' : rawApiBaseUrl.replace(/\/+$/, '');
 
 export class ApiError extends Error {
   status: number;
@@ -16,13 +19,11 @@ type RequestOptions = Omit<RequestInit, 'body'> & {
 };
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  if (!API_BASE_URL) {
-    throw new ApiError('VITE_API_BASE_URL is not configured.', 500);
-  }
-
   const { token, ...requestOptions } = options;
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const requestUrl = API_BASE_URL ? `${API_BASE_URL}${normalizedPath}` : normalizedPath;
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(requestUrl, {
     ...requestOptions,
     headers: {
       'Content-Type': 'application/json',
