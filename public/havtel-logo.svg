@@ -1,0 +1,7 @@
+<svg viewBox="0 0 120 40" xmlns="http://www.w3.org/2000/svg">
+  <rect x="1.5" y="1.5" width="117" height="37" rx="2" fill="white" stroke="#1a3f6f" stroke-width="2.5"/>
+  <rect x="60" y="1.5" width="58.5" height="37" rx="0" fill="#1a3f6f"/>
+  <rect x="59" y="1.5" width="59.5" height="37" rx="2" fill="#1a3f6f"/>
+  <text x="7" y="28" font-family="'Arial Black', Arial, sans-serif" font-size="20" font-weight="900" fill="#1a3f6f" letter-spacing="-0.5">HAV</text>
+  <text x="63" y="28" font-family="'Arial Black', Arial, sans-serif" font-size="20" font-weight="900" fill="white" letter-spacing="-0.5">TEL</text>
+</svg>
