@@ -261,3 +261,190 @@ export async function getOrderRequest(token: string, orderId: string): Promise<O
     token,
   });
 }
+
+// =====================================================================
+// Catalog
+// =====================================================================
+
+export type Category = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  icon: string | null;
+  is_active: boolean;
+  children: Category[];
+};
+
+export type ProductImage = {
+  id: string;
+  url: string;
+  sort_order: number;
+  is_primary: boolean;
+  variant_id: string | null;
+};
+
+export type ProductVariant = {
+  id: string;
+  sku: string;
+  name: string;
+  price: string;
+  variant_attributes: Record<string, unknown>;
+  is_active: boolean;
+  inventory: { qty_available: number } | null;
+  images: ProductImage[];
+};
+
+export type ProductListItem = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  category_id: string | null;
+  is_active: boolean;
+  created_at: string;
+  price_from: string | null;
+};
+
+export type ProductDetail = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  attributes: Record<string, unknown>;
+  category_id: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  variants: ProductVariant[];
+  images: ProductImage[];
+};
+
+export type PaginatedProducts = {
+  items: ProductListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+};
+
+export async function listCategoriesRequest(): Promise<Category[]> {
+  return apiRequest<Category[]>('/api/v1/categories');
+}
+
+export async function listProductsRequest(
+  params: { page?: number; limit?: number; category?: string; search?: string } = {},
+  token?: string,
+): Promise<PaginatedProducts> {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', String(params.page));
+  if (params.limit) query.set('limit', String(params.limit));
+  if (params.category) query.set('category', params.category);
+  if (params.search) query.set('search', params.search);
+  const qs = query.toString();
+  return apiRequest<PaginatedProducts>(`/api/v1/products${qs ? `?${qs}` : ''}`, { token });
+}
+
+export async function getProductRequest(slug: string, token?: string): Promise<ProductDetail> {
+  return apiRequest<ProductDetail>(`/api/v1/products/${slug}`, { token });
+}
+
+// =====================================================================
+// Cart
+// =====================================================================
+
+export type ApiCartItemVariant = {
+  id: string;
+  sku: string;
+  name: string;
+};
+
+export type ApiCartItem = {
+  id: string;
+  variant_id: string;
+  quantity: number;
+  unit_price: string;
+  subtotal: string;
+  variant: ApiCartItemVariant;
+};
+
+export type ApiCart = {
+  id: string;
+  expires_at: string;
+  items: ApiCartItem[];
+  total: string;
+};
+
+export async function getCartRequest(token: string): Promise<ApiCart> {
+  return apiRequest<ApiCart>('/api/v1/cart', { token });
+}
+
+export async function addCartItemRequest(
+  token: string,
+  payload: { variant_id: string; quantity: number },
+): Promise<ApiCart> {
+  return apiRequest<ApiCart>('/api/v1/cart/items', {
+    method: 'POST',
+    token,
+    body: payload,
+  });
+}
+
+export async function updateCartItemRequest(
+  token: string,
+  variantId: string,
+  quantity: number,
+): Promise<ApiCart> {
+  return apiRequest<ApiCart>(`/api/v1/cart/items/${variantId}`, {
+    method: 'PATCH',
+    token,
+    body: { quantity },
+  });
+}
+
+export async function removeCartItemRequest(token: string, variantId: string): Promise<ApiCart> {
+  return apiRequest<ApiCart>(`/api/v1/cart/items/${variantId}`, {
+    method: 'DELETE',
+    token,
+  });
+}
+
+export async function clearCartRequest(token: string): Promise<void> {
+  return apiRequest<void>('/api/v1/cart', {
+    method: 'DELETE',
+    token,
+  });
+}
+
+// =====================================================================
+// Checkout
+// =====================================================================
+
+export type CheckoutPayload = {
+  shipping_address_id?: string;
+  shipping_address?: OrderShippingAddress;
+  shipping_method: string;
+  shipping_amount: number;
+  tax_amount: number;
+};
+
+export type CheckoutResponse = {
+  order_id: string;
+  order_number: string;
+  total_amount: string;
+  payment_id: string;
+  provider: string;
+  external_reference: string;
+  client_secret: string;
+};
+
+export async function checkoutRequest(
+  token: string,
+  payload: CheckoutPayload,
+): Promise<CheckoutResponse> {
+  return apiRequest<CheckoutResponse>('/api/v1/checkout', {
+    method: 'POST',
+    token,
+    body: payload,
+  });
+}

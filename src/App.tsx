@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { 
-  ShoppingCart, 
-  User, 
+import {
+  ShoppingCart,
+  User,
   CircleUserRound,
   Building2,
   Check,
-  ArrowRight, 
-  ChevronRight, 
-  Globe, 
-  Share2, 
-  ShieldCheck, 
+  ArrowRight,
+  ChevronRight,
+  Globe,
+  Share2,
+  ShieldCheck,
   MessageSquare,
   Search,
   MapPin,
@@ -34,26 +34,46 @@ import {
   Database,
   HardDrive,
   MousePointer2,
+  Wifi,
+  Server,
+  Smartphone,
+  Headphones,
+  Zap,
+  Shield,
+  Layers,
+  CircuitBoard,
   ChevronLeft,
   Package,
   LogOut,
   Send,
+  type LucideIcon,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ApiError,
   type AuthResponse,
+  type Category,
   type Order,
+  type ProductDetail,
+  type ProductVariant,
   type UserAddress,
-  createOrderRequest,
+  addCartItemRequest,
+  checkoutRequest,
   createUserAddressRequest,
   deleteUserAddressRequest,
+  getCartRequest,
   getOrderRequest,
+  getProductRequest,
   getCurrentUserRequest,
+  listCategoriesRequest,
   listOrdersRequest,
+  listProductsRequest,
   listUserAddressesRequest,
   loginRequest,
   registerRequest,
+  removeCartItemRequest,
+  setDefaultUserAddressRequest,
+  updateCartItemRequest,
   updateCurrentUserRequest,
   updateUserAddressRequest,
 } from './lib/api';
@@ -61,21 +81,29 @@ import {
 type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'review' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot';
 
 interface Product {
-  id: number;
+  id: string;
+  slug: string;
   name: string;
+  description: string | null;
   series: string;
   price: number;
   priceString: string;
   tag: string | null;
-  img: string;
+  img: string | null;
   category: string;
+  categorySlug: string;
   brand: string;
+  variants: ProductVariant[];
 }
 
 interface CartItem {
-  productId: number;
+  variantId: string;
+  productSlug: string;
+  productName: string;
+  variantName: string;
   quantity: number;
-  variant: string;
+  price: number;
+  img: string | null;
 }
 
 type CheckoutShippingAddress = {
@@ -127,31 +155,42 @@ function HavtelLogo({ height = 34, light = false }: { height?: number; light?: b
   );
 }
 
-const PRODUCTS: Product[] = [
-  { id: 1, name: "Quantum X-8000", series: "HAVTEL CORE", price: 799, priceString: "$799.00", tag: "IN STOCK", img: "/products/quantum-x-8000.jpg", category: "PROCESSORS", brand: "Havtel Core" },
-  { id: 2, name: "Omni-Board V2", series: "TITAN SERIES", price: 450, priceString: "$450.00", tag: null, img: "/products/omni-board-v2.jpg", category: "PROCESSORS", brand: "Titan Series" },
-  { id: 3, name: "Aether G-Force RTX", series: "AETHER TECH", price: 1299, priceString: "$1,299.00", tag: "LIMITED", img: "/products/aether-g-force-rtx.jpg", category: "GRAPHICS", brand: "Aether Tech" },
-  { id: 4, name: "Hyper-Pulse DDR5", series: "HAVTEL CORE", price: 215, priceString: "$215.00", tag: null, img: "/products/hyper-pulse-ddr5.jpg", category: "MEMORY", brand: "Havtel Core" },
-  { id: 5, name: "Quantum Lite-Z", series: "HAVTEL CORE", price: 349, priceString: "$349.00", tag: null, img: "/products/quantum-lite-z.jpg", category: "PROCESSORS", brand: "Havtel Core" },
-  { id: 6, name: "Frost-Bite Cooler", series: "TITAN SERIES", price: 125, priceString: "$125.00", tag: null, img: "/products/frost-bite-cooler.jpg", category: "PERIPHERALS", brand: "Titan Series" },
-  { id: 7, name: "Aether NVMe 4TB", series: "AETHER TECH", price: 580, priceString: "$580.00", tag: null, img: "/products/aether-nvme-4tb.jpg", category: "STORAGE", brand: "Aether Tech" },
-  { id: 8, name: "Mechanical Elite X", series: "TITAN SERIES", price: 210, priceString: "$210.00", tag: null, img: "/products/mechanical-elite-x.jpg", category: "PERIPHERALS", brand: "Titan Series" }
-];
+function mapApiProductToLocal(
+  p: import('./lib/api').ProductListItem,
+  categoryMap: Map<string, Category>,
+): Product {
+  const cat = p.category_id ? categoryMap.get(p.category_id) : null;
+  const price = p.price_from ? parseFloat(p.price_from) : 0;
+  return {
+    id: p.id,
+    slug: p.slug,
+    name: p.name,
+    description: p.description,
+    series: cat?.name ?? '',
+    price,
+    priceString: price > 0 ? formatCurrency(price) : 'N/A',
+    tag: null,
+    img: null,
+    category: cat?.name?.toUpperCase() ?? 'OTHER',
+    categorySlug: cat?.slug ?? '',
+    brand: cat?.name ?? '',
+    variants: [],
+  };
+}
 
 export default function App() {
   const [view, setView] = useState<View>('home');
-  const [selectedProductId, setSelectedProductId] = useState<number>(1);
+  const [selectedProductSlug, setSelectedProductSlug] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
   const [authSession, setAuthSession] = useState<AuthSession>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
-  const [cartItems, setCartItems] = useState<CartItem[]>([
-    { productId: 3, quantity: 1, variant: 'Aether Black | Founders Edition' },
-    { productId: 5, quantity: 1, variant: 'Core Silver | Performance Bundle' },
-    { productId: 8, quantity: 2, variant: 'Titanium Slate | Precision Switches' },
-  ]);
+  const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [shippingMethod, setShippingMethod] = useState<'priority' | 'express'>('priority');
   const [checkoutShippingAddress, setCheckoutShippingAddress] = useState<CheckoutShippingAddress | null>(null);
   const [latestOrder, setLatestOrder] = useState<Order | null>(null);
@@ -162,38 +201,113 @@ export default function App() {
   const isCheckoutView =
     view === 'cart' || view === 'shipping' || view === 'payment' || view === 'review' || view === 'confirmed' || view === 'tracking';
 
-  const addToCart = (productName: string) => {
-    const product = PRODUCTS.find((item) => item.name === productName);
+  const addToCart = async (productSlug: string) => {
+    if (!authSession?.access_token) {
+      setAuthError('Please sign in to add items to your cart.');
+      setView('login');
+      return;
+    }
 
-    if (product) {
+    try {
+      const detail = await getProductRequest(productSlug, authSession.access_token);
+      const variant = detail.variants.find((v) => v.is_active) ?? detail.variants[0];
+      if (!variant) {
+        setNotification('Product has no available variants');
+        setTimeout(() => setNotification(null), 3000);
+        return;
+      }
+
+      await addCartItemRequest(authSession.access_token, {
+        variant_id: variant.id,
+        quantity: 1,
+      });
+
+      const primaryImg =
+        detail.images.find((img) => img.is_primary && !img.variant_id)?.url ??
+        detail.images[0]?.url ??
+        null;
+
       setCartItems((prev) => {
-        const existing = prev.find((item) => item.productId === product.id);
-
+        const existing = prev.find((item) => item.variantId === variant.id);
         if (existing) {
           return prev.map((item) =>
-            item.productId === product.id ? { ...item, quantity: item.quantity + 1 } : item
+            item.variantId === variant.id ? { ...item, quantity: item.quantity + 1 } : item,
           );
         }
-
         return [
           ...prev,
           {
-            productId: product.id,
+            variantId: variant.id,
+            productSlug: detail.slug,
+            productName: detail.name,
+            variantName: variant.name,
             quantity: 1,
-            variant: `${product.brand} | ${product.series}`,
+            price: parseFloat(variant.price),
+            img: primaryImg,
           },
         ];
       });
-    }
 
-    setNotification(`Added ${productName} to cart`);
-    setTimeout(() => setNotification(null), 3000);
+      setNotification(`Added ${detail.name} to cart`);
+      setTimeout(() => setNotification(null), 3000);
+    } catch (error) {
+      setNotification(error instanceof ApiError ? error.message : 'Could not add item to cart');
+      setTimeout(() => setNotification(null), 3000);
+    }
   };
 
-  const openProduct = (productId: number) => {
-    setSelectedProductId(productId);
+  const openProduct = (slug: string) => {
+    setSelectedProductSlug(slug);
     setView('product');
   };
+
+  // Load products and categories from API
+  useEffect(() => {
+    setIsLoadingProducts(true);
+    Promise.all([listCategoriesRequest(), listProductsRequest({}, authSession?.access_token)])
+      .then(([cats, paginated]) => {
+        setCategories(cats);
+        const flat = new Map<string, Category>();
+        const flattenCats = (list: Category[]) => {
+          for (const c of list) {
+            flat.set(c.id, c);
+            if (c.children.length) flattenCats(c.children);
+          }
+        };
+        flattenCats(cats);
+        setProducts(paginated.items.map((p) => mapApiProductToLocal(p, flat)));
+      })
+      .catch(() => {/* products stay empty */})
+      .finally(() => setIsLoadingProducts(false));
+  }, [authSession?.access_token]);
+
+  // Sync cart from server on login
+  useEffect(() => {
+    if (!authSession?.access_token) return;
+    getCartRequest(authSession.access_token)
+      .then((cart) => {
+        if (cart.items.length === 0) return;
+        setCartItems((prev: CartItem[]) => {
+          const merged = [...prev];
+          for (const si of cart.items) {
+            const exists = merged.find((i) => i.variantId === si.variant_id);
+            if (!exists) {
+              merged.push({
+                variantId: si.variant_id,
+                productSlug: '',
+                productName: si.variant.name,
+                variantName: si.variant.name,
+                quantity: si.quantity,
+                price: parseFloat(si.unit_price),
+                img: null,
+              });
+            }
+          }
+          return merged;
+        });
+      })
+      .catch(() => {/* keep local cart */});
+  }, [authSession?.access_token]);
 
   const requireAuthForView = (nextView: View) => {
     if (isAuthenticated) {
@@ -358,22 +472,15 @@ export default function App() {
       return;
     }
 
-    const subtotal = cartItems.reduce((sum, item) => {
-      const product = PRODUCTS.find((entry) => entry.id === item.productId);
-      return sum + (product?.price ?? 0) * item.quantity;
-    }, 0);
+    const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
     const shippingAmount = shippingMethod === 'priority' ? 12 : 35;
     const taxAmount = subtotal * 0.0825;
-    const totalAmount = subtotal + shippingAmount + taxAmount;
 
     try {
-      const order = await createOrderRequest(authSession.access_token, {
-        payment_type: 'Credit Card',
+      const result = await checkoutRequest(authSession.access_token, {
         shipping_method: shippingMethod,
         shipping_amount: shippingAmount,
         tax_amount: taxAmount,
-        subtotal_amount: subtotal,
-        total_amount: totalAmount,
         shipping_address: {
           contact_name: `${checkoutShippingAddress.firstName} ${checkoutShippingAddress.lastName}`.trim(),
           email: checkoutShippingAddress.email,
@@ -384,24 +491,9 @@ export default function App() {
           postal_code: checkoutShippingAddress.postalCode,
           country: checkoutShippingAddress.country,
         },
-        items: cartItems
-          .map((item) => {
-            const product = PRODUCTS.find((entry) => entry.id === item.productId);
-            if (!product) {
-              return null;
-            }
-
-            return {
-              product_name: product.name,
-              variant_name: item.variant,
-              unit_price: product.price,
-              quantity: item.quantity,
-              product_image_url: product.img,
-            };
-          })
-          .filter((item): item is NonNullable<typeof item> => item !== null),
       });
 
+      const order = await getOrderRequest(authSession.access_token, result.order_id);
       setLatestOrder(order);
       setTrackedOrderId(order.id);
       setCartItems([]);
@@ -530,7 +622,7 @@ export default function App() {
 
       <AnimatePresence mode="wait">
         {view === 'home' ? (
-          <Home key="home" onShopClick={() => setView('shop')} onProductSelect={openProduct} />
+          <Home key="home" products={products} onShopClick={() => setView('shop')} onProductSelect={openProduct} />
         ) : view === 'notfound' ? (
           <NotFoundView key="notfound" onGoHome={() => {
             window.location.hash = '';
@@ -569,11 +661,13 @@ export default function App() {
             onGoToLogin={() => setView('login')}
           />
         ) : view === 'shop' ? (
-          <Shop key="shop" onAddToCart={addToCart} onProductSelect={openProduct} />
+          <Shop key="shop" products={products} categories={categories} isLoading={isLoadingProducts} onAddToCart={addToCart} onProductSelect={openProduct} />
         ) : view === 'product' ? (
           <ProductDetailView
-            key="product"
-            product={PRODUCTS.find((item) => item.id === selectedProductId) ?? PRODUCTS[0]}
+            key={`product-${selectedProductSlug ?? ''}`}
+            productSlug={selectedProductSlug ?? ''}
+            authToken={authSession?.access_token}
+            allProducts={products}
             onAddToCart={addToCart}
             onBackToShop={() => setView('shop')}
             onProductSelect={openProduct}
@@ -652,25 +746,37 @@ export default function App() {
             onClose={() => setView('home')}
             onGoHome={() => setView('home')}
             onProceedToShipping={() => requireAuthForView('shipping')}
-            onDecreaseQuantity={(productId) =>
-              setCartItems((prev) =>
-                prev.flatMap((item) => {
-                  if (item.productId !== productId) return [item];
-                  if (item.quantity <= 1) return [];
-                  return [{ ...item, quantity: item.quantity - 1 }];
-                })
-              )
-            }
-            onIncreaseQuantity={(productId) =>
-              setCartItems((prev) =>
-                prev.map((item) =>
-                  item.productId === productId ? { ...item, quantity: item.quantity + 1 } : item
-                )
-              )
-            }
-            onRemoveItem={(productId) =>
-              setCartItems((prev) => prev.filter((item) => item.productId !== productId))
-            }
+            onDecreaseQuantity={async (variantId) => {
+              const item = cartItems.find((i) => i.variantId === variantId);
+              if (!item) return;
+              if (item.quantity <= 1) {
+                setCartItems((prev) => prev.filter((i) => i.variantId !== variantId));
+                if (authSession?.access_token) {
+                  await removeCartItemRequest(authSession.access_token, variantId).catch(() => {});
+                }
+              } else {
+                const newQty = item.quantity - 1;
+                setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: newQty } : i));
+                if (authSession?.access_token) {
+                  await updateCartItemRequest(authSession.access_token, variantId, newQty).catch(() => {});
+                }
+              }
+            }}
+            onIncreaseQuantity={async (variantId) => {
+              const item = cartItems.find((i) => i.variantId === variantId);
+              if (!item) return;
+              const newQty = item.quantity + 1;
+              setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: newQty } : i));
+              if (authSession?.access_token) {
+                await updateCartItemRequest(authSession.access_token, variantId, newQty).catch(() => {});
+              }
+            }}
+            onRemoveItem={async (variantId) => {
+              setCartItems((prev) => prev.filter((i) => i.variantId !== variantId));
+              if (authSession?.access_token) {
+                await removeCartItemRequest(authSession.access_token, variantId).catch(() => {});
+              }
+            }}
           />
         ) : view === 'orders' ? (
           <OrderHistory
@@ -775,15 +881,12 @@ function ShoppingBagView({
   onClose: () => void;
   onGoHome: () => void;
   onProceedToShipping: () => void;
-  onDecreaseQuantity: (productId: number) => void;
-  onIncreaseQuantity: (productId: number) => void;
-  onRemoveItem: (productId: number) => void;
+  onDecreaseQuantity: (variantId: string) => void;
+  onIncreaseQuantity: (variantId: string) => void;
+  onRemoveItem: (variantId: string) => void;
   key?: string;
 }) {
-  const subtotal = cartItems.reduce((sum, item) => {
-    const product = PRODUCTS.find((entry) => entry.id === item.productId);
-    return sum + (product?.price ?? 0) * item.quantity;
-  }, 0);
+  const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const tax = subtotal * 0.08;
   const total = subtotal + tax;
 
@@ -834,61 +937,58 @@ function ShoppingBagView({
             </div>
 
             <div className="space-y-6">
-              {cartItems.map((item) => {
-                const product = PRODUCTS.find((entry) => entry.id === item.productId);
-                if (!product) return null;
-
-                return (
-                  <div
-                    key={item.productId}
-                    className="rounded-[28px] border border-white/5 bg-[#141b25] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.22)] md:p-7"
-                  >
-                    <div className="flex flex-col gap-6 md:flex-row md:items-center">
-                      <div className="h-40 w-full overflow-hidden rounded-2xl bg-[#0a0f14] md:h-36 md:w-40">
+              {cartItems.map((item) => (
+                <div
+                  key={item.variantId}
+                  className="rounded-[28px] border border-white/5 bg-[#141b25] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.22)] md:p-7"
+                >
+                  <div className="flex flex-col gap-6 md:flex-row md:items-center">
+                    <div className="h-40 w-full overflow-hidden rounded-2xl bg-[#0a0f14] md:h-36 md:w-40">
+                      {item.img ? (
                         <img
-                          src={product.img}
-                          alt={product.name}
+                          src={item.img}
+                          alt={item.productName}
                           className="h-full w-full object-cover"
                           referrerPolicy="no-referrer"
                         />
+                      ) : null}
+                    </div>
+
+                    <div className="flex-1">
+                      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <h2 className="text-3xl font-bold tracking-tight text-slate-100">{item.productName}</h2>
+                          <p className="mt-2 text-lg text-slate-400">{item.variantName}</p>
+                        </div>
+                        <div className="text-3xl font-black text-[#aac7ff]">
+                          {formatCurrency(item.price * item.quantity)}
+                        </div>
                       </div>
 
-                      <div className="flex-1">
-                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                          <div>
-                            <h2 className="text-3xl font-bold tracking-tight text-slate-100">{product.name}</h2>
-                            <p className="mt-2 text-lg text-slate-400">{item.variant}</p>
-                          </div>
-                          <div className="text-3xl font-black text-[#aac7ff]">
-                            {formatCurrency(product.price * item.quantity)}
-                          </div>
-                        </div>
-
-                        <div className="mt-8 flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
-                          <div className="inline-flex items-center gap-6 rounded-full bg-[#0b1016] px-6 py-4">
-                            <button type="button" onClick={() => onDecreaseQuantity(item.productId)} className="text-xl text-slate-300 transition-colors hover:text-white">
-                              <Minus size={18} />
-                            </button>
-                            <span className="min-w-4 text-center text-lg font-bold text-slate-100">{item.quantity}</span>
-                            <button type="button" onClick={() => onIncreaseQuantity(item.productId)} className="text-xl text-slate-300 transition-colors hover:text-white">
-                              <Plus size={18} />
-                            </button>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => onRemoveItem(item.productId)}
-                            className="inline-flex items-center gap-3 text-sm font-bold uppercase tracking-[0.2em] text-slate-400 transition-colors hover:text-white"
-                          >
-                            <Trash2 size={16} />
-                            Remove
+                      <div className="mt-8 flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+                        <div className="inline-flex items-center gap-6 rounded-full bg-[#0b1016] px-6 py-4">
+                          <button type="button" onClick={() => onDecreaseQuantity(item.variantId)} className="text-xl text-slate-300 transition-colors hover:text-white">
+                            <Minus size={18} />
+                          </button>
+                          <span className="min-w-4 text-center text-lg font-bold text-slate-100">{item.quantity}</span>
+                          <button type="button" onClick={() => onIncreaseQuantity(item.variantId)} className="text-xl text-slate-300 transition-colors hover:text-white">
+                            <Plus size={18} />
                           </button>
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={() => onRemoveItem(item.variantId)}
+                          className="inline-flex items-center gap-3 text-sm font-bold uppercase tracking-[0.2em] text-slate-400 transition-colors hover:text-white"
+                        >
+                          <Trash2 size={16} />
+                          Remove
+                        </button>
                       </div>
                     </div>
                   </div>
-                );
-              })}
+                </div>
+              ))}
 
               {cartItems.length === 0 && (
                 <div className="rounded-[28px] border border-white/5 bg-[#141b25] p-12 text-center">
@@ -1018,16 +1118,10 @@ function ShippingView({
   key?: string;
 }) {
   const shippingCost = shippingMethod === 'priority' ? 12 : 35;
-  const subtotal = cartItems.reduce((sum, item) => {
-    const product = PRODUCTS.find((entry) => entry.id === item.productId);
-    return sum + (product?.price ?? 0) * item.quantity;
-  }, 0);
+  const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const tax = subtotal * 0.08;
   const total = subtotal + shippingCost + tax;
-  const summaryItem = cartItems[0]
-    ? PRODUCTS.find((entry) => entry.id === cartItems[0].productId)
-    : null;
-  const summaryVariant = cartItems[0]?.variant ?? 'Configured order';
+  const summaryItem = cartItems[0] ?? null;
   const [savedAddresses, setSavedAddresses] = useState<UserAddress[]>([]);
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
   const [addressError, setAddressError] = useState<string | null>(null);
@@ -1387,12 +1481,12 @@ function ShippingView({
                 <>
                   <div className="flex gap-5">
                     <div className="h-24 w-24 overflow-hidden rounded-2xl bg-[#0b1016]">
-                      <img src={summaryItem.img} alt={summaryItem.name} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                      {summaryItem.img ? <img src={summaryItem.img} alt={summaryItem.productName} className="h-full w-full object-cover" referrerPolicy="no-referrer" /> : null}
                     </div>
                     <div>
-                      <h3 className="text-2xl font-bold tracking-tight text-slate-100">{summaryItem.name}</h3>
-                      <p className="mt-2 text-base text-slate-400">{summaryVariant}</p>
-                      <p className="mt-3 text-2xl font-black text-[#9dd6ff]">{formatCurrency(summaryItem.price * (cartItems[0]?.quantity ?? 1))}</p>
+                      <h3 className="text-2xl font-bold tracking-tight text-slate-100">{summaryItem.productName}</h3>
+                      <p className="mt-2 text-base text-slate-400">{summaryItem.variantName}</p>
+                      <p className="mt-3 text-2xl font-black text-[#9dd6ff]">{formatCurrency(summaryItem.price * summaryItem.quantity)}</p>
                     </div>
                   </div>
                   <div className="my-7 border-t border-white/5"></div>
@@ -1486,16 +1580,10 @@ function PaymentView({
   const [saveCard, setSaveCard] = useState(true);
   const shippingCost = shippingMethod === 'priority' ? 12 : 35;
   const shippingLabel = shippingMethod === 'priority' ? 'Priority Tech-Ship' : 'Quantum Express';
-  const subtotal = cartItems.reduce((sum, item) => {
-    const product = PRODUCTS.find((entry) => entry.id === item.productId);
-    return sum + (product?.price ?? 0) * item.quantity;
-  }, 0);
+  const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const tax = subtotal * 0.08;
   const total = subtotal + shippingCost + tax;
-  const summaryItem = cartItems[0]
-    ? PRODUCTS.find((entry) => entry.id === cartItems[0].productId)
-    : null;
-  const summaryVariant = cartItems[0]?.variant ?? 'Configured order';
+  const summaryItem = cartItems[0] ?? null;
 
   return (
     <motion.div
@@ -1651,12 +1739,12 @@ function PaymentView({
                 <>
                   <div className="flex gap-5">
                     <div className="h-28 w-28 overflow-hidden rounded-2xl bg-[#0b1016]">
-                      <img src={summaryItem.img} alt={summaryItem.name} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                      {summaryItem.img ? <img src={summaryItem.img} alt={summaryItem.productName} className="h-full w-full object-cover" referrerPolicy="no-referrer" /> : null}
                     </div>
                     <div>
-                      <h3 className="text-2xl font-bold tracking-tight text-slate-100">{summaryItem.name}</h3>
-                      <p className="mt-2 text-xl text-slate-400">{summaryVariant}</p>
-                      <p className="mt-3 text-2xl font-black text-[#9dd6ff]">{formatCurrency(summaryItem.price * (cartItems[0]?.quantity ?? 1))}</p>
+                      <h3 className="text-2xl font-bold tracking-tight text-slate-100">{summaryItem.productName}</h3>
+                      <p className="mt-2 text-xl text-slate-400">{summaryItem.variantName}</p>
+                      <p className="mt-3 text-2xl font-black text-[#9dd6ff]">{formatCurrency(summaryItem.price * summaryItem.quantity)}</p>
                     </div>
                   </div>
                   <div className="my-8 border-t border-white/5"></div>
@@ -1753,10 +1841,7 @@ function ReviewView({
 }) {
   const shippingCost = shippingMethod === 'priority' ? 12 : 35;
   const shippingLabel = shippingMethod === 'priority' ? 'STANDARD EXPRESS (2-3 BUSINESS DAYS)' : 'QUANTUM EXPRESS (NEXT DAY)';
-  const subtotal = cartItems.reduce((sum, item) => {
-    const product = PRODUCTS.find((entry) => entry.id === item.productId);
-    return sum + (product?.price ?? 0) * item.quantity;
-  }, 0);
+  const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const tax = subtotal * 0.0825;
   const total = subtotal + shippingCost + tax;
   const shippingName = [checkoutShippingAddress?.firstName, checkoutShippingAddress?.lastName].filter(Boolean).join(' ').trim();
@@ -2359,22 +2444,52 @@ function TrackOrderView({
 }
 
 function ProductDetailView({
-  product,
+  productSlug,
+  authToken,
+  allProducts,
   onAddToCart,
   onBackToShop,
   onProductSelect,
 }: {
-  product: Product;
-  onAddToCart: (name: string) => void;
+  productSlug: string;
+  authToken?: string;
+  allProducts: Product[];
+  onAddToCart: (slug: string) => void;
   onBackToShop: () => void;
-  onProductSelect: (productId: number) => void;
+  onProductSelect: (slug: string) => void;
   key?: string;
 }) {
+  const [apiProduct, setApiProduct] = useState<ProductDetail | null>(null);
   const [selectedTab, setSelectedTab] = useState<'description' | 'specs' | 'reviews'>('description');
-  const [selectedConfig, setSelectedConfig] = useState('16-Core / 32-Thread');
+  const [selectedConfig, setSelectedConfig] = useState('');
   const [selectedImage, setSelectedImage] = useState(0);
-  const gallery = [product.img, PRODUCTS[1]?.img, PRODUCTS[6]?.img, PRODUCTS[3]?.img].filter(Boolean);
-  const relatedProducts = PRODUCTS.filter((item) => item.id !== product.id).slice(0, 4);
+
+  useEffect(() => {
+    if (!productSlug) return;
+    setApiProduct(null);
+    getProductRequest(productSlug, authToken)
+      .then(setApiProduct)
+      .catch(() => {});
+  }, [productSlug, authToken]);
+
+  const gallery = (apiProduct?.images ?? [])
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((img) => img.url)
+    .filter(Boolean);
+  const firstVariant = apiProduct?.variants.find((v) => v.is_active) ?? apiProduct?.variants[0];
+  const priceString = firstVariant
+    ? formatCurrency(parseFloat(firstVariant.price))
+    : 'N/A';
+  const relatedProducts = allProducts.filter((p) => p.slug !== productSlug).slice(0, 4);
+
+  if (!apiProduct) {
+    return (
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pt-20 min-h-screen flex items-center justify-center bg-[#0f141b]">
+        <div className="text-slate-400 text-lg">Loading product…</div>
+      </motion.div>
+    );
+  }
+
   const specifications = [
     ['Architecture', 'Lumina v4 (3nm)'],
     ['Max Clock Speed', '5.8 GHz (Turbo)'],
@@ -2950,7 +3065,7 @@ function AuthForgotView({
   );
 }
 
-function Home({ onShopClick, onProductSelect }: { onShopClick: () => void; onProductSelect: (productId: number) => void; key?: string }) {
+function Home({ products, onShopClick, onProductSelect }: { products: Product[]; onShopClick: () => void; onProductSelect: (slug: string) => void; key?: string }) {
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -3040,19 +3155,21 @@ function Home({ onShopClick, onProductSelect }: { onShopClick: () => void; onPro
           </button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-          {PRODUCTS.slice(0, 4).map((prod) => (
+          {products.slice(0, 4).map((prod) => (
             <div
               key={prod.id}
-              onClick={() => onProductSelect(prod.id)}
+              onClick={() => onProductSelect(prod.slug)}
               className="bg-[#1c2025]/50 border border-white/5 rounded-2xl overflow-hidden group hover:border-[#aac7ff]/30 transition-all cursor-pointer"
             >
               <div className="aspect-square relative overflow-hidden bg-[#0a0e13]">
-                <img 
-                  src={prod.img} 
-                  alt={prod.name} 
-                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                  referrerPolicy="no-referrer"
-                />
+                {prod.img && (
+                  <img
+                    src={prod.img}
+                    alt={prod.name}
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                    referrerPolicy="no-referrer"
+                  />
+                )}
               </div>
               <div className="p-6">
                 <span className="text-[10px] font-black tracking-widest text-slate-500 mb-2 block">{prod.series}</span>
@@ -3062,7 +3179,7 @@ function Home({ onShopClick, onProductSelect }: { onShopClick: () => void; onPro
                   <button
                     onClick={(event) => {
                       event.stopPropagation();
-                      onProductSelect(prod.id);
+                      onProductSelect(prod.slug);
                     }}
                     className="p-2 bg-white/5 rounded-lg text-slate-400 hover:bg-[#aac7ff] hover:text-[#003064] transition-all"
                   >
@@ -3116,29 +3233,42 @@ function Home({ onShopClick, onProductSelect }: { onShopClick: () => void; onPro
   );
 }
 
-function Shop({ onAddToCart, onProductSelect }: { onAddToCart: (name: string) => void; onProductSelect: (productId: number) => void; key?: string }) {
-  const [activeCategory, setActiveCategory] = useState('PROCESSORS');
+const ICON_MAP: Record<string, LucideIcon> = {
+  Cpu,
+  Monitor,
+  Database,
+  HardDrive,
+  MousePointer2,
+  Wifi,
+  Server,
+  Smartphone,
+  Headphones,
+  Zap,
+  Shield,
+  Globe,
+  Package,
+  Layers,
+  CircuitBoard,
+};
+
+function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }: { products: Product[]; categories: Category[]; isLoading: boolean; onAddToCart: (slug: string) => void; onProductSelect: (slug: string) => void; key?: string }) {
+  const [activeCategory, setActiveCategory] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('Popularity');
-  const [selectedBrands, setSelectedBrands] = useState<string[]>(['Havtel Core']);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  const filteredProducts = PRODUCTS.filter(prod => {
-    const matchesCategory = prod.category === activeCategory;
-    const matchesSearch = prod.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+  const filteredProducts = products.filter(prod => {
+    const matchesCategory = !activeCategory || prod.category === activeCategory;
+    const matchesSearch = prod.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          prod.series.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesBrand = selectedBrands.length === 0 || selectedBrands.includes(prod.brand);
-    return matchesCategory && matchesSearch && matchesBrand;
+    return matchesCategory && matchesSearch;
   }).sort((a, b) => {
     if (sortBy === 'Price: Low to High') return a.price - b.price;
     if (sortBy === 'Price: High to Low') return b.price - a.price;
     return 0; // Popularity (default order)
   });
 
-  const toggleBrand = (brand: string) => {
-    setSelectedBrands(prev => 
-      prev.includes(brand) ? prev.filter(b => b !== brand) : [...prev, brand]
-    );
+  const toggleBrand = (_brand: string) => {
   };
 
   return (
@@ -3172,31 +3302,46 @@ function Shop({ onAddToCart, onProductSelect }: { onAddToCart: (name: string) =>
           </button>
         </div>
 
-        <nav className="space-y-2 mb-12">
-          {[
-            { id: 'PROCESSORS', icon: Cpu, label: 'PROCESSORS' },
-            { id: 'GRAPHICS', icon: Monitor, label: 'GRAPHICS' },
-            { id: 'MEMORY', icon: Database, label: 'MEMORY' },
-            { id: 'STORAGE', icon: HardDrive, label: 'STORAGE' },
-            { id: 'PERIPHERALS', icon: MousePointer2, label: 'PERIPHERALS' },
-          ].map((cat) => (
-            <button
-              key={cat.id}
-              onClick={() => {
-                setActiveCategory(cat.id);
-                setIsSidebarOpen(false);
-              }}
-              className={`w-full flex items-center gap-4 px-4 py-3 rounded-lg text-xs font-bold transition-all ${
-                activeCategory === cat.id 
-                ? 'bg-[#3e90ff]/10 text-[#aac7ff] border-l-2 border-[#aac7ff]' 
-                : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
-              }`}
-            >
-              <cat.icon size={16} />
-              {cat.label}
-            </button>
-          ))}
-        </nav>
+        <div className="mb-12">
+          <span className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold block mb-4">Categories</span>
+          <nav className="space-y-1 max-h-[calc(5*3.25rem)] overflow-y-auto pr-1 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10">
+            {isLoading ? (
+              <div className="px-4 py-3 text-xs text-slate-500">Loading...</div>
+            ) : (
+              <>
+                <button
+                  onClick={() => { setActiveCategory(''); setIsSidebarOpen(false); }}
+                  className={`w-full flex items-center gap-4 px-4 py-3 rounded-lg text-xs font-bold transition-all ${
+                    activeCategory === ''
+                      ? 'bg-[#3e90ff]/10 text-[#aac7ff] border-l-2 border-[#aac7ff]'
+                      : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
+                  }`}
+                >
+                  <Package size={16} />
+                  ALL
+                </button>
+                {categories.filter(c => c.is_active).map((cat) => {
+                  const IconComponent = cat.icon ? (ICON_MAP[cat.icon] ?? Package) : Package;
+                  const catKey = cat.name.toUpperCase();
+                  return (
+                    <button
+                      key={cat.id}
+                      onClick={() => { setActiveCategory(catKey); setIsSidebarOpen(false); }}
+                      className={`w-full flex items-center gap-4 px-4 py-3 rounded-lg text-xs font-bold transition-all ${
+                        activeCategory === catKey
+                          ? 'bg-[#3e90ff]/10 text-[#aac7ff] border-l-2 border-[#aac7ff]'
+                          : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
+                      }`}
+                    >
+                      <IconComponent size={16} />
+                      {cat.name.toUpperCase()}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+          </nav>
+        </div>
 
         <div className="space-y-8">
           <div>
@@ -3218,17 +3363,11 @@ function Shop({ onAddToCart, onProductSelect }: { onAddToCart: (name: string) =>
             <div className="space-y-4">
               {['Havtel Core', 'Titan Series', 'Aether Tech'].map((brand) => (
                 <label key={brand} className="flex items-center gap-3 cursor-pointer group">
-                  <div 
+                  <div
                     onClick={() => toggleBrand(brand)}
-                    className={`w-4 h-4 border rounded flex items-center justify-center transition-colors ${
-                      selectedBrands.includes(brand) ? 'border-[#aac7ff] bg-[#aac7ff]/10' : 'border-white/20 group-hover:border-[#aac7ff]'
-                    }`}
-                  >
-                    {selectedBrands.includes(brand) && <div className="w-2 h-2 bg-[#aac7ff] rounded-sm"></div>}
-                  </div>
-                  <span className={`text-xs transition-colors ${
-                    selectedBrands.includes(brand) ? 'text-slate-200' : 'text-slate-400 group-hover:text-slate-200'
-                  }`}>{brand}</span>
+                    className="w-4 h-4 border border-white/20 rounded flex items-center justify-center transition-colors group-hover:border-[#aac7ff]"
+                  />
+                  <span className="text-xs text-slate-400 group-hover:text-slate-200 transition-colors">{brand}</span>
                 </label>
               ))}
             </div>
@@ -3280,7 +3419,7 @@ function Shop({ onAddToCart, onProductSelect }: { onAddToCart: (name: string) =>
             {filteredProducts.map((prod) => (
               <div
                 key={prod.id}
-                onClick={() => onProductSelect(prod.id)}
+                onClick={() => onProductSelect(prod.slug)}
                 className="bg-[#1c2025]/50 border border-white/5 rounded-2xl overflow-hidden group hover:border-[#aac7ff]/30 transition-all cursor-pointer"
               >
                 <div className="aspect-square relative overflow-hidden bg-[#0a0e13]">
@@ -3291,22 +3430,24 @@ function Shop({ onAddToCart, onProductSelect }: { onAddToCart: (name: string) =>
                       {prod.tag}
                     </span>
                   )}
-                  <img 
-                    src={prod.img} 
-                    alt={prod.name} 
-                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                    referrerPolicy="no-referrer"
-                  />
+                  {prod.img && (
+                    <img
+                      src={prod.img}
+                      alt={prod.name}
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                      referrerPolicy="no-referrer"
+                    />
+                  )}
                 </div>
                 <div className="p-6">
                   <span className="text-[10px] font-black tracking-widest text-slate-500 mb-2 block">{prod.series}</span>
                   <h3 className="text-lg font-bold text-slate-100 mb-6">{prod.name}</h3>
                   <div className="flex justify-between items-center">
                     <span className="text-lg font-black text-slate-100">{prod.priceString}</span>
-                    <button 
+                    <button
                       onClick={(event) => {
                         event.stopPropagation();
-                        onAddToCart(prod.name);
+                        onAddToCart(prod.slug);
                       }}
                       className="p-2 bg-white/5 rounded-lg text-slate-400 hover:bg-[#aac7ff] hover:text-[#003064] transition-all"
                     >
