@@ -201,7 +201,7 @@ export default function App() {
   const isCheckoutView =
     view === 'cart' || view === 'shipping' || view === 'payment' || view === 'review' || view === 'confirmed' || view === 'tracking';
 
-  const addToCart = async (productSlug: string) => {
+  const addToCart = async (productSlug: string, preferredVariantId?: string) => {
     if (!authSession?.access_token) {
       setAuthError('Please sign in to add items to your cart.');
       setView('login');
@@ -210,9 +210,21 @@ export default function App() {
 
     try {
       const detail = await getProductRequest(productSlug, authSession.access_token);
-      const variant = detail.variants.find((v) => v.is_active) ?? detail.variants[0];
+      const variant =
+        (preferredVariantId
+          ? detail.variants.find((v) => v.id === preferredVariantId && v.is_active)
+          : undefined) ??
+        detail.variants.find((v) => v.is_active && (v.inventory?.qty_available ?? 0) > 0) ??
+        detail.variants.find((v) => v.is_active) ??
+        detail.variants[0];
       if (!variant) {
-        setNotification('Product has no available variants');
+        setNotification('This product has no active variants yet.');
+        setTimeout(() => setNotification(null), 3000);
+        return;
+      }
+
+      if ((variant.inventory?.qty_available ?? 0) <= 0) {
+        setNotification('This product is currently out of stock.');
         setTimeout(() => setNotification(null), 3000);
         return;
       }
@@ -2454,32 +2466,56 @@ function ProductDetailView({
   productSlug: string;
   authToken?: string;
   allProducts: Product[];
-  onAddToCart: (slug: string) => void;
+  onAddToCart: (slug: string, variantId?: string) => void;
   onBackToShop: () => void;
   onProductSelect: (slug: string) => void;
   key?: string;
 }) {
   const [apiProduct, setApiProduct] = useState<ProductDetail | null>(null);
   const [selectedTab, setSelectedTab] = useState<'description' | 'specs' | 'reviews'>('description');
-  const [selectedConfig, setSelectedConfig] = useState('');
+  const [selectedVariantId, setSelectedVariantId] = useState<string>('');
   const [selectedImage, setSelectedImage] = useState(0);
 
   useEffect(() => {
     if (!productSlug) return;
     setApiProduct(null);
+    setSelectedVariantId('');
+    setSelectedImage(0);
     getProductRequest(productSlug, authToken)
       .then(setApiProduct)
       .catch(() => {});
   }, [productSlug, authToken]);
 
-  const gallery = (apiProduct?.images ?? [])
+  const variantOptions = apiProduct?.variants ?? [];
+  const firstVariant =
+    variantOptions.find((v) => v.is_active && (v.inventory?.qty_available ?? 0) > 0) ??
+    variantOptions.find((v) => v.is_active) ??
+    variantOptions[0];
+
+  useEffect(() => {
+    if (!selectedVariantId && firstVariant) {
+      setSelectedVariantId(firstVariant.id);
+    }
+  }, [firstVariant, selectedVariantId]);
+
+  const selectedVariant = variantOptions.find((variant) => variant.id === selectedVariantId) ?? firstVariant ?? null;
+  const gallerySource = [
+    ...(selectedVariant?.images ?? []),
+    ...(apiProduct?.images ?? []),
+  ];
+  const gallery = gallerySource
+    .slice()
     .sort((a, b) => a.sort_order - b.sort_order)
     .map((img) => img.url)
     .filter(Boolean);
-  const firstVariant = apiProduct?.variants.find((v) => v.is_active) ?? apiProduct?.variants[0];
-  const priceString = firstVariant
-    ? formatCurrency(parseFloat(firstVariant.price))
+  const heroImage = gallery[selectedImage] ?? gallery[0] ?? null;
+  const priceString = selectedVariant
+    ? formatCurrency(parseFloat(selectedVariant.price))
     : 'N/A';
+  const productName = apiProduct?.name ?? 'Product';
+  const productDescription =
+    apiProduct?.description ??
+    `Engineered for the next generation of computational dominance. The ${productName} leverages Havtel's proprietary photonic-bridge architecture to deliver unprecedented throughput.`;
   const relatedProducts = allProducts.filter((p) => p.slug !== productSlug).slice(0, 4);
 
   if (!apiProduct) {
@@ -2520,7 +2556,11 @@ function ProductDetailView({
           <div>
             <div className="rounded-[30px] border border-white/5 bg-[#151b23] p-5 shadow-[0_24px_60px_rgba(0,0,0,0.24)] xl:max-w-[720px]">
               <div className="aspect-[0.96/0.82] overflow-hidden rounded-[24px] bg-[#0a0f14]">
-                <img src={gallery[selectedImage]} alt={product.name} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                {heroImage ? (
+                  <img src={heroImage} alt={productName} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-sm text-slate-500">No image available</div>
+                )}
               </div>
             </div>
 
@@ -2534,7 +2574,7 @@ function ProductDetailView({
                     selectedImage === index ? 'border-[#aac7ff] bg-[#182130]' : 'border-white/8 bg-[#121821]'
                   }`}
                 >
-                  <img src={image} alt={`${product.name} preview ${index + 1}`} className="h-full w-full rounded-xl object-cover" referrerPolicy="no-referrer" />
+                  <img src={image} alt={`${productName} preview ${index + 1}`} className="h-full w-full rounded-xl object-cover" referrerPolicy="no-referrer" />
                 </button>
               ))}
             </div>
@@ -2544,42 +2584,53 @@ function ProductDetailView({
             <span className="inline-flex rounded-full bg-[#13273b] px-3 py-1 text-[10px] font-black uppercase tracking-[0.24em] text-[#b5cbff]">
               Flagship Core
             </span>
-            <h1 className="mt-4 text-5xl font-black tracking-tighter text-slate-100 md:text-6xl">{product.name}</h1>
+            <h1 className="mt-4 text-5xl font-black tracking-tighter text-slate-100 md:text-6xl">{productName}</h1>
             <div className="mt-3 flex items-center gap-3">
-              <span className="text-4xl font-black text-[#d8e7ff]">{product.priceString}</span>
-              <span className="text-sm uppercase tracking-[0.22em] text-emerald-300">In Stock - Limited Edition</span>
+              <span className="text-4xl font-black text-[#d8e7ff]">{priceString}</span>
+              <span className="text-sm uppercase tracking-[0.22em] text-emerald-300">
+                {(selectedVariant?.inventory?.qty_available ?? 0) > 0 ? 'In Stock' : 'Out of Stock'}
+              </span>
             </div>
             <p className="mt-8 max-w-xl text-lg leading-relaxed text-slate-400">
-              Engineered for the next generation of computational dominance. The {product.name} leverages Havtel's proprietary photonic-bridge architecture to deliver unprecedented throughput.
+              {productDescription}
             </p>
 
             <div className="mt-10">
               <div className="mb-4 text-xs font-bold uppercase tracking-[0.28em] text-slate-300">Select Configuration</div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {[
-                  '16-Core / 32-Thread',
-                  '24-Core / 48-Thread',
-                ].map((config) => (
+                {variantOptions.map((variant) => (
                   <button
-                    key={config}
+                    key={variant.id}
                     type="button"
-                    onClick={() => setSelectedConfig(config)}
+                    onClick={() => {
+                      setSelectedVariantId(variant.id);
+                      setSelectedImage(0);
+                    }}
                     className={`rounded-2xl border px-5 py-4 text-left transition-all ${
-                      selectedConfig === config ? 'border-[#aac7ff] bg-[#172131]' : 'border-white/8 bg-[#141a22]'
+                      selectedVariant?.id === variant.id ? 'border-[#aac7ff] bg-[#172131]' : 'border-white/8 bg-[#141a22]'
                     }`}
                   >
-                    <div className="text-sm font-bold text-slate-100">{config}</div>
-                    <div className="mt-1 text-xs text-slate-400">{config.includes('24-Core') ? 'X-8200 Ultra Edition' : 'Standard Performance'}</div>
+                    <div className="text-sm font-bold text-slate-100">{variant.name}</div>
+                    <div className="mt-1 text-xs text-slate-400">
+                      {formatCurrency(parseFloat(variant.price))}
+                      {(variant.inventory?.qty_available ?? 0) > 0 ? ` • ${variant.inventory?.qty_available} available` : ' • Out of stock'}
+                    </div>
                   </button>
                 ))}
               </div>
+              {variantOptions.length === 0 && (
+                <div className="rounded-2xl border border-amber-400/20 bg-amber-400/5 px-5 py-4 text-sm text-amber-200">
+                  This product does not have any active variants configured yet.
+                </div>
+              )}
             </div>
 
             <div className="mt-8 space-y-3">
               <button
                 type="button"
-                onClick={() => onAddToCart(product.name)}
-                className="w-full rounded-[18px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-5 text-lg font-bold text-[#03192f] shadow-[0_20px_50px_rgba(77,147,247,0.28)]"
+                onClick={() => onAddToCart(apiProduct.slug, selectedVariant?.id)}
+                disabled={!selectedVariant || (selectedVariant.inventory?.qty_available ?? 0) <= 0}
+                className="w-full rounded-[18px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-5 text-lg font-bold text-[#03192f] shadow-[0_20px_50px_rgba(77,147,247,0.28)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Add to Cart
               </button>
@@ -2600,22 +2651,23 @@ function ProductDetailView({
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-4">
               <div className="h-14 w-14 overflow-hidden rounded-xl bg-[#0b1016]">
-                <img src={product.img} alt={product.name} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                {heroImage ? <img src={heroImage} alt={productName} className="h-full w-full object-cover" referrerPolicy="no-referrer" /> : null}
               </div>
               <div>
-                <div className="text-sm font-bold text-slate-100">{product.name}</div>
-                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">{selectedConfig} configuration</div>
+                <div className="text-sm font-bold text-slate-100">{productName}</div>
+                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">{selectedVariant?.name ?? 'No configuration'} </div>
               </div>
             </div>
             <div className="flex items-center gap-6">
               <div className="text-right">
                 <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Subtotal</div>
-                <div className="text-2xl font-black text-[#d8e7ff]">{product.priceString}</div>
+                <div className="text-2xl font-black text-[#d8e7ff]">{priceString}</div>
               </div>
               <button
                 type="button"
-                onClick={() => onAddToCart(product.name)}
-                className="rounded-2xl bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-4 text-base font-bold text-[#03192f]"
+                onClick={() => onAddToCart(apiProduct.slug, selectedVariant?.id)}
+                disabled={!selectedVariant || (selectedVariant.inventory?.qty_available ?? 0) <= 0}
+                className="rounded-2xl bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-4 text-base font-bold text-[#03192f] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Add to Cart
               </button>
