@@ -43,6 +43,10 @@ jobs:
             exit 1
           fi
 
+      - name: Sync package.json version with tag
+        if: github.ref_type == 'tag'
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
+
       - name: Validate frontend build configuration
         env:
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}

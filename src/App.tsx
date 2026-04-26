@@ -82,6 +82,9 @@ import {
   updateCartItemRequest,
   updateCurrentUserRequest,
   updateUserAddressRequest,
+  fetchMaintenanceStatus,
+  listPickupPointsRequest,
+  type PickupPointPublic,
 } from './lib/api';
 
 type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot';
@@ -389,10 +392,12 @@ export default function App() {
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [shippingMethod, setShippingMethod] = useState<'priority' | 'express'>('priority');
   const [deliveryType, setDeliveryType] = useState<'home_delivery' | 'warehouse_pickup'>('home_delivery');
+  const [selectedPickupPointId, setSelectedPickupPointId] = useState<string | null>(null);
   const [checkoutShippingAddress, setCheckoutShippingAddress] = useState<CheckoutShippingAddress | null>(null);
   const [checkoutResponse, setCheckoutResponse] = useState<CheckoutResponse | null>(null);
   const [isInitiatingCheckout, setIsInitiatingCheckout] = useState(false);
   const [latestOrder, setLatestOrder] = useState<Order | null>(null);
+  const [isMaintenance, setIsMaintenance] = useState(false);
   const [trackedOrderId, setTrackedOrderId] = useState<string | null>(initialRoute.trackedOrderId);
   const isAuthenticated = authSession !== null;
   const isPopNavigationRef = useRef(false);
@@ -472,6 +477,25 @@ export default function App() {
     setSelectedProductSlug(slug);
     setView('product');
   };
+
+  useEffect(() => {
+    // Check on mount and poll every 30 s so maintenance activates without needing a failed request.
+    const check = async () => {
+      const active = await fetchMaintenanceStatus();
+      setIsMaintenance(active);
+    };
+    void check();
+    const interval = setInterval(() => void check(), 30_000);
+
+    // Also react immediately when any API call returns 503.
+    const handleMaintenance = () => setIsMaintenance(true);
+    window.addEventListener('app:maintenance', handleMaintenance);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('app:maintenance', handleMaintenance);
+    };
+  }, []);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -744,9 +768,10 @@ export default function App() {
           shipping_method: isWarehousePickup ? 'warehouse_pickup' : shippingMethod,
           shipping_amount: shippingAmount,
           tax_amount: taxAmount,
-          ...(isWarehousePickup || !address
-            ? {}
-            : {
+          ...(isWarehousePickup
+            ? { pickup_point_id: selectedPickupPointId ?? undefined }
+            : address
+            ? {
                 shipping_address: {
                   contact_name: `${address.firstName} ${address.lastName}`.trim(),
                   email: address.email,
@@ -757,7 +782,8 @@ export default function App() {
                   postal_code: address.postalCode,
                   country: address.country,
                 },
-              }),
+              }
+            : {}),
         })
       );
       setCheckoutResponse(result);
@@ -783,6 +809,10 @@ export default function App() {
     setCartItems([]);
     setView('confirmed');
   };
+
+  if (isMaintenance) {
+    return <MaintenancePage />;
+  }
 
   return (
     <div className="min-h-screen bg-[#101419] text-[#e0e2ea] font-sans selection:bg-[#aac7ff]/30 antialiased">
@@ -830,9 +860,20 @@ export default function App() {
               aria-expanded={isUserMenuOpen}
               aria-label="Open account menu"
               onClick={() => setIsUserMenuOpen((prev) => !prev)}
-              className={`transition-colors p-2 rounded-full hover:bg-white/10 ${isUserMenuOpen ? 'text-white bg-white/10' : 'text-white/80 hover:text-white'}`}
+              className={`transition-colors rounded-full hover:bg-white/10 ${isUserMenuOpen ? 'bg-white/10' : ''} ${isAuthenticated ? 'p-0 w-9 h-9 flex items-center justify-center' : 'p-2'}`}
             >
-              <User size={20} />
+              {isAuthenticated ? (
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-[#1a3f6f] text-xs font-bold ring-2 ring-white/30 select-none">
+                  {authSession!.user.full_name
+                    .split(' ')
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .map((w) => w[0].toUpperCase())
+                    .join('')}
+                </span>
+              ) : (
+                <User size={20} className={isUserMenuOpen ? 'text-white' : 'text-white/80'} />
+              )}
             </button>
 
             <AnimatePresence>
@@ -1017,10 +1058,12 @@ export default function App() {
             checkoutShippingAddress={checkoutShippingAddress}
             shippingMethod={shippingMethod}
             deliveryType={deliveryType}
+            selectedPickupPointId={selectedPickupPointId}
             isLoading={isInitiatingCheckout}
             onShippingAddressChange={setCheckoutShippingAddress}
             onShippingMethodChange={setShippingMethod}
-            onDeliveryTypeChange={setDeliveryType}
+            onDeliveryTypeChange={(type) => { setDeliveryType(type); setSelectedPickupPointId(null); }}
+            onPickupPointChange={setSelectedPickupPointId}
             onClose={() => setView('home')}
             onGoHome={() => setView('home')}
             onBackToCart={() => requireAuthForView('cart')}
@@ -1368,10 +1411,12 @@ function ShippingView({
   checkoutShippingAddress,
   shippingMethod,
   deliveryType,
+  selectedPickupPointId,
   isLoading = false,
   onShippingAddressChange,
   onShippingMethodChange,
   onDeliveryTypeChange,
+  onPickupPointChange,
   onClose,
   onGoHome,
   onBackToCart,
@@ -1383,10 +1428,12 @@ function ShippingView({
   checkoutShippingAddress: CheckoutShippingAddress | null;
   shippingMethod: 'priority' | 'express';
   deliveryType: 'home_delivery' | 'warehouse_pickup';
+  selectedPickupPointId: string | null;
   isLoading?: boolean;
   onShippingAddressChange: (address: CheckoutShippingAddress) => void;
   onShippingMethodChange: (method: 'priority' | 'express') => void;
   onDeliveryTypeChange: (type: 'home_delivery' | 'warehouse_pickup') => void;
+  onPickupPointChange: (id: string) => void;
   onClose: () => void;
   onGoHome: () => void;
   onBackToCart: () => void;
@@ -1404,6 +1451,17 @@ function ShippingView({
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
   const [addressError, setAddressError] = useState<string | null>(null);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+  const [pickupPoints, setPickupPoints] = useState<PickupPointPublic[]>([]);
+  const [isLoadingPickupPoints, setIsLoadingPickupPoints] = useState(false);
+
+  useEffect(() => {
+    if (deliveryType !== 'warehouse_pickup') return;
+    setIsLoadingPickupPoints(true);
+    listPickupPointsRequest()
+      .then(setPickupPoints)
+      .catch(() => setPickupPoints([]))
+      .finally(() => setIsLoadingPickupPoints(false));
+  }, [deliveryType]);
   const [shippingForm, setShippingForm] = useState<CheckoutShippingAddress>({
     email: '',
     phone: '',
@@ -1573,19 +1631,59 @@ function ShippingView({
               </div>
 
               {isWarehousePickup ? (
-                <div className="rounded-[18px] border border-[#d6e4ec] bg-white p-8 shadow-[0_12px_28px_rgba(107,154,187,0.12)]">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#eaf6ff]">
-                      <Package size={22} className="text-[#1f6dad]" />
-                    </div>
-                    <div>
-                      <div className="text-xl font-black text-[#1f6dad]">Warehouse Pickup Selected</div>
-                      <div className="text-sm text-[#5d95bc] mt-0.5">No shipping costs apply</div>
-                    </div>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-lg bg-[linear-gradient(180deg,#7eb7db_0%,#9bc8e2_100%)] px-2 text-xs font-black text-white shadow-[0_8px_18px_rgba(107,154,187,0.16)]">2</span>
+                    <h2 className="text-[26px] font-black tracking-[-0.04em] text-[#1f6dad]">Select Pickup Location</h2>
                   </div>
-                  <p className="text-[#5d95bc] text-sm leading-relaxed">
-                    Your order will be prepared at our warehouse. We'll contact you with the exact pickup location and schedule once your order is confirmed.
-                  </p>
+                  {isLoadingPickupPoints ? (
+                    <div className="rounded-[18px] border border-[#d6e4ec] bg-white p-6 text-[#5d95bc] shadow-[0_12px_28px_rgba(107,154,187,0.12)]">
+                      Loading pickup locations...
+                    </div>
+                  ) : pickupPoints.length === 0 ? (
+                    <div className="rounded-[18px] border border-[#d6e4ec] bg-white p-8 text-center shadow-[0_12px_28px_rgba(107,154,187,0.12)]">
+                      <Package size={32} className="mx-auto mb-3 text-[#5d95bc]" />
+                      <p className="font-bold text-[#1f6dad]">No pickup locations available</p>
+                      <p className="mt-1 text-sm text-[#5d95bc]">Please choose home delivery or contact support.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      {pickupPoints.map((point) => (
+                        <button
+                          key={point.id}
+                          type="button"
+                          onClick={() => onPickupPointChange(point.id)}
+                          className={`rounded-[18px] border p-6 text-left shadow-[0_12px_28px_rgba(107,154,187,0.12)] transition-all ${
+                            selectedPickupPointId === point.id
+                              ? 'border-[#7eb7db] bg-[linear-gradient(90deg,#0f66a6_0%,#2c73aa_100%)] text-white'
+                              : 'border-[#d6e4ec] bg-white text-[#1f6dad] hover:border-[#7eb7db]'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${selectedPickupPointId === point.id ? 'bg-white/20' : 'bg-[#eaf6ff]'}`}>
+                              <Package size={18} className={selectedPickupPointId === point.id ? 'text-white' : 'text-[#1f6dad]'} />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="font-black text-base leading-tight">{point.name}</div>
+                              <div className={`mt-1 text-sm leading-snug ${selectedPickupPointId === point.id ? 'text-white/80' : 'text-[#5d95bc]'}`}>
+                                {point.address}, {point.city}{point.state ? `, ${point.state}` : ''} · {point.country}
+                              </div>
+                              {point.phone && (
+                                <div className={`mt-1 text-xs ${selectedPickupPointId === point.id ? 'text-white/70' : 'text-[#5d95bc]'}`}>
+                                  {point.phone}
+                                </div>
+                              )}
+                              {point.notes && (
+                                <div className={`mt-1 text-xs italic ${selectedPickupPointId === point.id ? 'text-white/60' : 'text-[#8cb8d4]'}`}>
+                                  {point.notes}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <>
@@ -1796,11 +1894,11 @@ function ShippingView({
                 </button>
                 <button
                   type="button"
-                  disabled={isLoading}
+                  disabled={isLoading || (isWarehousePickup && !selectedPickupPointId)}
                   onClick={() => onProceedToPayment(isWarehousePickup ? null : shippingForm)}
                   className="rounded-[16px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-10 py-5 text-[20px] font-black text-white shadow-[0_16px_30px_rgba(13,77,138,0.24)] transition-transform hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
                 >
-                  {isLoading ? 'Preparing Order…' : 'Proceed to Payment'}
+                  {isLoading ? 'Preparing Order…' : isWarehousePickup && !selectedPickupPointId ? 'Select a Pickup Location' : 'Proceed to Payment'}
                 </button>
               </div>
             </form>
@@ -4802,5 +4900,34 @@ function Support() {
         </div>
       </section>
     </motion.div>
+  );
+}
+
+function MaintenancePage() {
+  return (
+    <div className="min-h-screen bg-[#101419] text-[#e0e2ea] font-sans flex flex-col items-center justify-center px-6 text-center">
+      <HavtelLogo height={40} />
+
+      <div className="mt-12 mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-[#1a3f6f]/40 ring-2 ring-[#1a3f6f]">
+        <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#aac7ff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+      </div>
+
+      <h1 className="text-3xl font-black tracking-tight text-white">We'll be right back</h1>
+      <p className="mt-4 max-w-sm text-base leading-relaxed text-[#8b9cbf]">
+        Havtel is currently undergoing scheduled maintenance.
+        <br />
+        We'll be back online shortly. Thank you for your patience.
+      </p>
+
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="mt-10 rounded-full bg-[#1a3f6f] px-8 py-3 text-sm font-bold text-white ring-1 ring-[#aac7ff]/20 transition hover:bg-[#1e4d87]"
+      >
+        Try again
+      </button>
+    </div>
   );
 }

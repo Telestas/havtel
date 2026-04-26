@@ -45,6 +45,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       // Keep fallback message when the response is not JSON.
     }
 
+    if (response.status === 503) {
+      window.dispatchEvent(new CustomEvent('app:maintenance', { detail: { message } }));
+    }
     throw new ApiError(message, response.status);
   }
 
@@ -428,9 +431,25 @@ export async function clearCartRequest(token: string): Promise<void> {
 // Checkout
 // =====================================================================
 
+export type PickupPointPublic = {
+  id: string;
+  name: string;
+  address: string;
+  city: string;
+  state: string | null;
+  country: string;
+  phone: string | null;
+  notes: string | null;
+};
+
+export async function listPickupPointsRequest(): Promise<PickupPointPublic[]> {
+  return apiRequest<PickupPointPublic[]>('/api/v1/pickup-points');
+}
+
 export type CheckoutPayload = {
   shipping_address_id?: string;
   shipping_address?: OrderShippingAddress;
+  pickup_point_id?: string;
   shipping_method: string;
   shipping_amount: number;
   tax_amount: number;
@@ -455,4 +474,16 @@ export async function checkoutRequest(
     token,
     body: payload,
   });
+}
+
+export async function fetchMaintenanceStatus(): Promise<boolean> {
+  try {
+    const requestUrl = API_BASE_URL ? `${API_BASE_URL}/api/v1/health` : '/api/v1/health';
+    const res = await fetch(requestUrl, { method: 'GET' });
+    if (!res.ok) return false;
+    const body = await res.json() as { maintenance?: boolean };
+    return body.maintenance === true;
+  } catch {
+    return false;
+  }
 }
