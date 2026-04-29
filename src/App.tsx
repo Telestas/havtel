@@ -103,6 +103,7 @@ interface Product {
   categorySlug: string;
   brand: string;
   variants: ProductVariant[];
+  isInStock: boolean;
 }
 
 interface CartItem {
@@ -373,6 +374,7 @@ function mapApiProductToLocal(
     categorySlug: cat?.slug ?? '',
     brand: cat?.name ?? '',
     variants: [],
+    isInStock: p.is_in_stock,
   };
 }
 
@@ -1102,6 +1104,13 @@ export default function App() {
                 await updateCartItemRequest(authSession.access_token, variantId, newQty).catch(() => {});
               }
             }}
+            onSetQuantity={async (variantId, qty) => {
+              const newQty = Math.max(1, qty);
+              setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: newQty } : i));
+              if (authSession?.access_token) {
+                await updateCartItemRequest(authSession.access_token, variantId, newQty).catch(() => {});
+              }
+            }}
             onRemoveItem={async (variantId) => {
               setCartItems((prev) => prev.filter((i) => i.variantId !== variantId));
               if (authSession?.access_token) {
@@ -1207,6 +1216,7 @@ function ShoppingBagView({
   onProceedToShipping,
   onDecreaseQuantity,
   onIncreaseQuantity,
+  onSetQuantity,
   onRemoveItem,
 }: {
   cartItems: CartItem[];
@@ -1215,6 +1225,7 @@ function ShoppingBagView({
   onProceedToShipping: () => void;
   onDecreaseQuantity: (variantId: string) => void;
   onIncreaseQuantity: (variantId: string) => void;
+  onSetQuantity: (variantId: string, qty: number) => void;
   onRemoveItem: (variantId: string) => void;
   key?: string;
 }) {
@@ -1278,11 +1289,25 @@ function ShoppingBagView({
                       </div>
 
                       <div className="mt-8 flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
-                        <div className="inline-flex items-center gap-7 rounded-[16px] bg-[linear-gradient(90deg,#7eb7db_0%,#9cc7e2_100%)] px-7 py-4 shadow-[0_10px_20px_rgba(14,67,108,0.18)]">
+                        <div className="inline-flex items-center gap-5 rounded-[16px] bg-[linear-gradient(90deg,#7eb7db_0%,#9cc7e2_100%)] px-5 py-4 shadow-[0_10px_20px_rgba(14,67,108,0.18)]">
                           <button type="button" onClick={() => onDecreaseQuantity(item.variantId)} className="text-xl font-black text-white transition-colors hover:text-white/80">
                             <Minus size={18} />
                           </button>
-                          <span className="min-w-4 text-center text-[22px] font-black text-white">{item.quantity}</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={item.quantity}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10);
+                              if (!isNaN(val) && val >= 1) onSetQuantity(item.variantId, val);
+                            }}
+                            onBlur={(e) => {
+                              const val = parseInt(e.target.value, 10);
+                              if (isNaN(val) || val < 1) onSetQuantity(item.variantId, 1);
+                            }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                            className="w-12 bg-transparent text-center text-[22px] font-black text-white [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none focus:outline-none"
+                          />
                           <button type="button" onClick={() => onIncreaseQuantity(item.variantId)} className="text-xl font-black text-white transition-colors hover:text-white/80">
                             <Plus size={18} />
                           </button>
@@ -2105,7 +2130,7 @@ function PaymentView({
       />
 
       <main className="mx-auto max-w-[1600px] px-8 py-14 md:px-16">
-        <div className="grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,1fr)_520px]">
           <section>
             <div className="mb-10 max-w-4xl">
               <h1 className="text-5xl font-black uppercase tracking-[-0.08em] text-[#1f6dad] md:text-[82px] md:leading-[0.95]">Payment</h1>
@@ -3591,6 +3616,8 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('Popularity');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const PRODUCTS_PER_PAGE = 9;
 
   const maxProductPrice = Math.max(...products.map(p => p.price), 0);
   const availableBrands = Array.from(new Set(products.map(p => p.brand).filter(Boolean)));
@@ -3612,6 +3639,10 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
     if (sortBy === 'Price: High to Low') return b.price - a.price;
     return 0;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE));
+  const safePage = Math.min(currentPage, totalPages);
+  const pagedProducts = filteredProducts.slice((safePage - 1) * PRODUCTS_PER_PAGE, safePage * PRODUCTS_PER_PAGE);
 
   const displayCategory = activeCategory || (categories[0]?.name?.toUpperCase() ?? 'PRODUCTS');
   const categoryDescription = activeCategory
@@ -3641,7 +3672,7 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
             <div>
               <span className="block text-[11px] font-black uppercase tracking-[0.16em] text-[#76a0bc]">High-Performance Hardware</span>
             </div>
-            <button type="button" onClick={() => setIsSidebarOpen(false)} className="text-[#537089] md:hidden">
+            <button type="button" aria-label="Close filters" onClick={() => setIsSidebarOpen(false)} className="text-[#537089] md:hidden">
               <X size={22} />
             </button>
           </div>
@@ -3790,19 +3821,25 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
           </div>
 
           {filteredProducts.length > 0 ? (
-            <div className="grid max-w-[760px] grid-cols-1 gap-6 xl:grid-cols-2">
-              {filteredProducts.map((prod) => (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {pagedProducts.map((prod) => (
                 <button
                   key={prod.id}
                   type="button"
                   onClick={() => onProductSelect(prod.slug)}
-                  className="group overflow-hidden rounded-[24px] border border-[#d5e3eb] bg-white/88 text-left shadow-[0_20px_45px_rgba(107,154,187,0.18)] transition-transform hover:-translate-y-1"
+                  className="group overflow-hidden rounded-[18px] border border-[#d5e3eb] bg-white/88 text-left shadow-[0_10px_28px_rgba(107,154,187,0.15)] transition-transform hover:-translate-y-1"
                 >
-                  <div className="relative rounded-t-[24px] border-b border-[#d6e7f0] bg-[radial-gradient(circle_at_top_left,#fff8de_0%,#ffffff_30%,#f3fbff_100%)] p-6">
-                    <span className="absolute right-5 top-5 rounded-full border border-[#d6e7f0] bg-[#f2f9fe] px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-[#7aa6c2] shadow-[0_6px_14px_rgba(107,154,187,0.14)]">
-                      In Stock
-                    </span>
-                    <div className="aspect-[0.96/0.82] overflow-hidden rounded-[18px]">
+                  <div className="relative rounded-t-[18px] border-b border-[#d6e7f0] bg-[radial-gradient(circle_at_top_left,#fff8de_0%,#ffffff_30%,#f3fbff_100%)] p-3">
+                    {prod.isInStock ? (
+                      <span className="absolute right-3 top-3 rounded-full border border-[#d6e7f0] bg-[#f2f9fe] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-[#7aa6c2]">
+                        In Stock
+                      </span>
+                    ) : (
+                      <span className="absolute right-3 top-3 rounded-full border border-[#f0d6d6] bg-[#fef2f2] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-[#bb5a42]">
+                        Out of Stock
+                      </span>
+                    )}
+                    <div className="aspect-[4/3] overflow-hidden rounded-[12px]">
                       {prod.img ? (
                         <img
                           src={prod.img}
@@ -3811,31 +3848,31 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
                           referrerPolicy="no-referrer"
                         />
                       ) : (
-                        <div className="flex h-full items-center justify-center rounded-[18px] border border-dashed border-[#c7ddea] text-xs font-bold uppercase tracking-[0.2em] text-[#7a9ab2]">
+                        <div className="flex h-full items-center justify-center rounded-[12px] border border-dashed border-[#c7ddea] text-xs font-bold uppercase tracking-[0.2em] text-[#7a9ab2]">
                           No Image
                         </div>
                       )}
                     </div>
                   </div>
 
-                  <div className="bg-[linear-gradient(90deg,#64add9_0%,#73b7df_100%)] p-5">
-                    <span className="block text-[10px] font-black uppercase tracking-[0.26em] text-white/85">
+                  <div className="bg-[linear-gradient(90deg,#64add9_0%,#73b7df_100%)] p-3">
+                    <span className="block text-[9px] font-black uppercase tracking-[0.26em] text-white/85">
                       {prod.series || 'Havtel Core'}
                     </span>
-                    <h3 className="mt-3 min-h-[56px] text-[20px]/[1.1] font-black tracking-[-0.04em] text-white">
+                    <h3 className="mt-1 min-h-[40px] text-[15px]/[1.15] font-black tracking-[-0.03em] text-white">
                       {prod.name}
                     </h3>
-                    <div className="mt-6 flex items-end justify-between gap-4">
-                      <span className="text-[20px] font-black tracking-[-0.04em] text-white">{prod.priceString}</span>
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      <span className="text-[16px] font-black tracking-[-0.04em] text-white">{prod.priceString}</span>
                       <button
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
                           onAddToCart(prod.slug);
                         }}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-[10px] bg-[#1c6aa7] text-white shadow-[0_12px_24px_rgba(13,77,138,0.22)] transition-colors hover:bg-[#0d4d8a]"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-[#1c6aa7] text-white shadow-[0_8px_16px_rgba(13,77,138,0.22)] transition-colors hover:bg-[#0d4d8a]"
                       >
-                        <ShoppingCart size={16} />
+                        <ShoppingCart size={14} />
                       </button>
                     </div>
                   </div>
@@ -3852,15 +3889,24 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
             </div>
           )}
 
-          {filteredProducts.length > 0 && (
-            <div className="mt-12 flex max-w-[760px] justify-center items-center gap-2 text-[#5d7c93]">
-              <button type="button" aria-label="Previous page" className="p-2 transition-colors hover:text-[#0d4d8a]"><ChevronLeft size={20} /></button>
-              {[1, 2, 3].map((n) => (
+          {totalPages > 1 && (
+            <div className="mt-8 flex justify-center items-center gap-2 text-[#5d7c93]">
+              <button
+                type="button"
+                aria-label="Previous page"
+                disabled={safePage === 1}
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                className="p-2 transition-colors hover:text-[#0d4d8a] disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft size={20} />
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
                 <button
                   key={n}
                   type="button"
+                  onClick={() => setCurrentPage(n)}
                   className={`h-10 w-10 rounded-[10px] text-sm font-black transition-all ${
-                    n === 1
+                    n === safePage
                       ? 'bg-[#5fa8d7] text-white shadow-[0_10px_24px_rgba(95,168,215,0.25)]'
                       : 'bg-white/70 text-[#5d7c93] hover:bg-[#e6f2f9]'
                   }`}
@@ -3868,9 +3914,15 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
                   {n}
                 </button>
               ))}
-              <span className="px-2 text-sm font-bold">...</span>
-              <button type="button" className="h-10 w-10 rounded-[10px] bg-white/70 text-sm font-black text-[#5d7c93] hover:bg-[#e6f2f9]">12</button>
-              <button type="button" aria-label="Next page" className="p-2 transition-colors hover:text-[#0d4d8a]"><ChevronRight size={20} /></button>
+              <button
+                type="button"
+                aria-label="Next page"
+                disabled={safePage === totalPages}
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                className="p-2 transition-colors hover:text-[#0d4d8a] disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronRight size={20} />
+              </button>
             </div>
           )}
         </main>

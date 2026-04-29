@@ -315,6 +315,7 @@ export type ProductListItem = {
   created_at: string;
   price_from: string | null;
   primary_image_url: string | null;
+  is_in_stock: boolean;
 };
 
 export type ProductDetail = {
