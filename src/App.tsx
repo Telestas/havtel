@@ -1076,7 +1076,7 @@ export default function App() {
           <ShoppingBagView
             key="cart"
             cartItems={cartItems}
-            onClose={() => setView('home')}
+            onClose={() => setView('shop')}
             onGoHome={() => setView('home')}
             onProceedToShipping={() => requireAuthForView('shipping')}
             onDecreaseQuantity={async (variantId) => {
@@ -1283,8 +1283,15 @@ function ShoppingBagView({
                           <h2 className="text-[34px] font-black tracking-[-0.05em] text-white">{item.productName}</h2>
                           <p className="mt-2 text-[18px] italic text-white/85">{item.variantName}</p>
                         </div>
-                        <div className="text-[34px] font-black tracking-[-0.05em] text-white">
-                          {formatCurrency(item.price * item.quantity)}
+                        <div className="text-right">
+                          <div className="text-[34px] font-black tracking-[-0.05em] text-white">
+                            {formatCurrency(item.price * item.quantity)}
+                          </div>
+                          {item.quantity > 1 && (
+                            <div className="mt-1 text-[14px] font-bold text-white/65">
+                              {formatCurrency(item.price)} × {item.quantity}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -1333,10 +1340,10 @@ function ShoppingBagView({
                   <p className="mb-8 text-[#5d95bc]">Add products from the catalog to build your next HAVTEL order.</p>
                   <button
                     type="button"
-                    onClick={onGoHome}
+                    onClick={onClose}
                     className="inline-flex items-center gap-3 rounded-[14px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-8 py-5 text-lg font-black text-white shadow-[0_14px_30px_rgba(13,77,138,0.22)]"
                   >
-                    Go to Home
+                    Browse the Store
                     <ArrowRight size={20} />
                   </button>
                 </div>
@@ -2691,6 +2698,10 @@ function ProductDetailView({
   const [selectedTab, setSelectedTab] = useState<'description' | 'specs' | 'reviews'>('description');
   const [selectedVariantId, setSelectedVariantId] = useState<string>('');
   const [selectedImage, setSelectedImage] = useState(0);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [productSlug]);
 
   useEffect(() => {
     if (!productSlug) return;
