@@ -626,15 +626,22 @@ export default function App() {
         setCartItems((prev: CartItem[]) => {
           const isFirstSync = !isFirstCartSyncDoneRef.current;
           isFirstCartSyncDoneRef.current = true;
+          // Restore cached images from localStorage since the server cart API
+          // does not return image URLs for cart items.
+          const withImages = (items: CartItem[]) =>
+            items.map((si) => {
+              const local = prev.find((i) => i.variantId === si.variantId);
+              return local?.img ? { ...si, img: local.img } : si;
+            });
           // Page refresh (token was present at mount): server is authoritative,
           // replace any stale localStorage cache with the live server state.
           if (isFirstSync && initialTokenRef.current) {
-            return serverItems;
+            return withImages(serverItems);
           }
           // Mid-session login (guest → user): merge local cart into server cart
           // so guest items that the server doesn't know about yet are preserved.
           if (prev.length === 0) return serverItems;
-          const merged = [...serverItems];
+          const merged = [...withImages(serverItems)];
           for (const localItem of prev) {
             if (!merged.find((i) => i.variantId === localItem.variantId)) {
               merged.push(localItem);
@@ -1419,11 +1426,24 @@ function ShoppingBagView({
                   </button>
                 </div>
               )}
+
+              {cartItems.length > 0 && (
+                <div className="pt-4">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="inline-flex items-center gap-2 text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd] transition-colors hover:text-[#1f6dad]"
+                  >
+                    <ArrowRight size={16} className="rotate-180" />
+                    Continue Shopping
+                  </button>
+                </div>
+              )}
             </div>
           </section>
 
           <aside className="h-fit rounded-[22px] border-[5px] border-[#7eb7db] bg-[rgba(255,250,241,0.92)] p-8 shadow-[0_16px_34px_rgba(107,154,187,0.16)] xl:sticky xl:top-10">
-            <h2 className="mb-8 text-[58px] font-black tracking-[-0.06em] text-[#1f6dad]">Order Summary</h2>
+            <h2 className="mb-8 text-[32px] font-black tracking-[-0.06em] text-[#1f6dad] md:text-[58px]">Order Summary</h2>
 
             {cartItems.length > 0 && (
               <>
@@ -1468,7 +1488,7 @@ function ShoppingBagView({
                 <div className="text-[20px] font-black uppercase tracking-[0.06em] text-[#5c95bd]">Total</div>
               </div>
               <div className="text-right">
-                <div className="text-[72px] font-black tracking-[-0.08em] leading-none text-[#1f6dad]">
+                <div className="text-[44px] font-black tracking-[-0.08em] leading-none text-[#1f6dad] md:text-[72px]">
                   {formatCurrency(total)}
                 </div>
                 <div className="mt-2 text-[12px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Including VAT</div>
@@ -2301,7 +2321,7 @@ function PaymentView({
           </section>
 
           <aside className="h-fit rounded-[22px] border-[5px] border-[#7eb7db] bg-[rgba(255,250,241,0.92)] p-7 shadow-[0_16px_34px_rgba(107,154,187,0.16)]">
-            <h2 className="mb-8 text-[56px] font-black tracking-[-0.06em] text-[#1f6dad]">Order Summary</h2>
+            <h2 className="mb-8 text-[32px] font-black tracking-[-0.06em] text-[#1f6dad] md:text-[56px]">Order Summary</h2>
             <div className="space-y-4 text-sm">
               <div className="flex items-center justify-between"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Subtotal</span><span className="font-black text-[#1f6dad]">{formatCurrency(subtotal)}</span></div>
               <div className="flex items-center justify-between"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Shipping</span><span className="font-black text-[#1f6dad]">{formatCurrency(shippingCost)}</span></div>
@@ -2310,7 +2330,7 @@ function PaymentView({
             <div className="my-6 border-t border-[#7eb7db]"></div>
             <div className="flex items-center justify-between gap-4">
               <span className="text-[20px] font-black uppercase tracking-[0.06em] text-[#5c95bd]">Total</span>
-              <span className="text-[64px] font-black tracking-[-0.08em] leading-none text-[#1f6dad]">{formatCurrency(total)}</span>
+              <span className="text-[44px] font-black tracking-[-0.08em] leading-none text-[#1f6dad] md:text-[64px]">{formatCurrency(total)}</span>
             </div>
             <div className="mt-8">
               <StripePaymentForm total={total} onPaymentSuccess={onPaymentSuccess} />
@@ -2370,7 +2390,7 @@ function OrderConfirmedView({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="min-h-screen bg-[radial-gradient(circle_at_bottom_right,rgba(24,98,126,0.22),transparent_28%),#0f141b] text-slate-100"
+      className="min-h-screen bg-[linear-gradient(90deg,#ffffff_0%,#fbf7f4_72%,#fff6df_100%)] text-[#1a3f6f]"
     >
       <CheckoutHeader
         activeStep="payment"
@@ -2379,102 +2399,105 @@ function OrderConfirmedView({
       />
 
       <main className="mx-auto max-w-[1600px] px-8 py-14 md:px-16">
-        <div className="grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,1fr)_580px]">
+        <div className="grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,1fr)_520px]">
           <section className="pt-8">
-            <div className="mb-10 flex h-32 w-32 items-center justify-center rounded-full bg-[#2f3742] shadow-[0_0_50px_rgba(0,195,255,0.25)]">
-              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#9ee3ff] text-[#0a1520]">
+            <div className="mb-10 flex h-28 w-28 items-center justify-center rounded-full bg-[#deeef7] shadow-[0_0_40px_rgba(31,109,173,0.15)]">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] text-white shadow-[0_8px_20px_rgba(13,77,138,0.3)]">
                 <Check size={32} />
               </div>
             </div>
-            <h1 className="text-7xl font-black tracking-tighter">Order Confirmed.</h1>
-            <p className="mt-8 max-w-3xl text-3xl leading-relaxed text-slate-400">
+
+            <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.14em] text-[#5c95bd]">Purchase Complete</span>
+            <h1 className="text-5xl font-black uppercase tracking-[-0.08em] text-[#1f6dad] md:text-7xl md:leading-none">Order Confirmed.</h1>
+            <p className="mt-6 max-w-3xl text-[20px] italic leading-relaxed text-[#5d95bc]">
               Your high-performance setup is now in the queue. We've sent a detailed receipt to your registered email address.
             </p>
 
-            <div className="mt-12 flex flex-col gap-4 sm:flex-row">
+            <div className="mt-10 flex flex-col gap-4 sm:flex-row">
               <button
                 type="button"
                 onClick={onTrackOrder}
-                className="rounded-[22px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-10 py-6 text-2xl font-bold text-[#02182d] shadow-[0_24px_60px_rgba(77,147,247,0.35)]"
+                className="inline-flex items-center justify-center gap-3 rounded-[14px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-10 py-5 text-lg font-black text-white shadow-[0_14px_30px_rgba(13,77,138,0.22)] transition-transform hover:scale-[1.01]"
               >
                 Track Order
               </button>
               <button
                 type="button"
                 onClick={onContinueShopping}
-                className="rounded-[22px] border border-white/10 px-10 py-6 text-2xl font-bold text-[#b9d1ff] transition-colors hover:bg-white/5"
+                className="inline-flex items-center justify-center rounded-[14px] border-2 border-[#7eb7db] px-10 py-5 text-lg font-black text-[#1f6dad] transition-colors hover:bg-[#deeef7]"
               >
                 Continue Shopping
               </button>
             </div>
 
-            <div className="mt-24">
-              <div className="text-sm font-bold uppercase tracking-[0.34em] text-slate-300">Estimated Arrival</div>
-              <div className="mt-8 rounded-[28px] border border-white/5 bg-[#1f252d] p-8">
+            <div className="mt-16">
+              <span className="block text-[12px] font-black uppercase tracking-[0.14em] text-[#5c95bd] mb-6">Estimated Arrival</span>
+              <div className="rounded-[22px] border border-[#d6e4ec] bg-white p-7 shadow-[0_16px_34px_rgba(107,154,187,0.12)]">
                 <div className="flex items-center gap-6">
-                  <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-[#303946] text-[#b9d1ff]">
+                  <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(180deg,#8ec4e3_0%,#7db8dd_100%)] text-white">
                     <Truck size={34} />
                   </div>
-                    <div>
-                      <div className="text-3xl font-bold text-slate-100">
-                        {orderShippingMethod === 'priority' ? 'Priority delivery window confirmed' : 'Express delivery window confirmed'}
-                      </div>
-                      <div className="mt-3 text-2xl text-slate-400">
-                        {orderShippingMethod === 'priority' ? 'Standard High-Priority Logistics' : 'Quantum Express Priority Lane'}
-                      </div>
+                  <div>
+                    <div className="text-2xl font-black text-[#1f6dad]">
+                      {orderShippingMethod === 'priority' ? 'Priority delivery window confirmed' : 'Express delivery window confirmed'}
+                    </div>
+                    <div className="mt-2 text-lg italic text-[#5d95bc]">
+                      {orderShippingMethod === 'priority' ? 'Standard High-Priority Logistics' : 'Quantum Express Priority Lane'}
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </section>
 
-          <aside className="rounded-[32px] border border-white/5 bg-[#232831] p-8 shadow-[0_30px_80px_rgba(0,0,0,0.3)] h-fit">
+          <aside className="h-fit rounded-[22px] border-[5px] border-[#7eb7db] bg-[rgba(255,250,241,0.92)] p-8 shadow-[0_16px_34px_rgba(107,154,187,0.16)] xl:sticky xl:top-10">
             <div className="mb-8 flex items-center justify-between gap-4">
-              <h2 className="text-4xl font-black tracking-tight">Order Summary</h2>
-              <span className="rounded-full bg-white/6 px-4 py-2 text-lg text-slate-300">{order?.order_number ?? 'Pending Order Number'}</span>
+              <h2 className="text-[28px] font-black tracking-[-0.06em] text-[#1f6dad] md:text-[38px]">Order Summary</h2>
+              <span className="rounded-full bg-[#e8f4fc] px-3 py-1.5 text-[11px] font-black text-[#1f6dad]">{order?.order_number ?? 'Pending'}</span>
             </div>
 
-            <div className="space-y-8">
-              {orderItems.map((item) => {
-                return (
-                  <div key={item.id} className="flex gap-5">
-                    <div className="h-24 w-24 overflow-hidden rounded-2xl bg-[#0b1016]">
-                      {item.product_image_url ? (
-                        <img src={item.product_image_url} alt={item.product_name} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
-                      ) : null}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <h3 className="text-2xl font-bold text-slate-100">{item.product_name}</h3>
-                          <p className="mt-2 text-xl text-slate-400">{item.variant_name}</p>
-                        </div>
-                        <span className="text-2xl text-slate-100">{formatCurrency(Number(item.unit_price) * item.quantity)}</span>
+            <div className="space-y-5">
+              {orderItems.map((item) => (
+                <div key={item.id} className="flex gap-4">
+                  <div className="h-20 w-20 shrink-0 overflow-hidden rounded-[14px] bg-[linear-gradient(180deg,#8ec4e3_0%,#7db8dd_100%)]">
+                    {item.product_image_url ? (
+                      <img src={item.product_image_url} alt={item.product_name} className="h-full w-full object-contain p-2" referrerPolicy="no-referrer" />
+                    ) : null}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="truncate text-[15px] font-black text-[#1f6dad]">{item.product_name}</h3>
+                        <p className="mt-1 text-[13px] italic text-[#5c95bd]">{item.variant_name} × {item.quantity}</p>
                       </div>
+                      <span className="shrink-0 text-[15px] font-black text-[#1f6dad]">{formatCurrency(Number(item.unit_price) * item.quantity)}</span>
                     </div>
                   </div>
-                );
-              })}
+                </div>
+              ))}
             </div>
 
-            <div className="my-8 border-t border-white/5"></div>
-            <div className="space-y-4 text-xl">
-              <div className="flex items-center justify-between"><span className="text-slate-300">Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
-              <div className="flex items-center justify-between"><span className="text-slate-300">Shipping</span><span className="text-[#75d3ff]">{formatCurrency(shippingCost)}</span></div>
-              <div className="flex items-center justify-between"><span className="text-slate-300">Tax (EST)</span><span>{formatCurrency(tax)}</span></div>
+            <div className="my-6 border-t border-[#c4dcec]"></div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-4"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Subtotal</span><span className="text-[15px] font-black text-[#1f6dad]">{formatCurrency(subtotal)}</span></div>
+              <div className="flex items-center justify-between gap-4"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Shipping</span><span className="text-[15px] font-black text-[#1f6dad]">{formatCurrency(shippingCost)}</span></div>
+              <div className="flex items-center justify-between gap-4"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Tax (EST)</span><span className="text-[15px] font-black text-[#1f6dad]">{formatCurrency(tax)}</span></div>
             </div>
-            <div className="my-8 border-t border-white/5"></div>
+            <div className="my-6 border-t border-[#7eb7db]"></div>
             <div className="flex items-end justify-between gap-4">
-              <span className="text-3xl font-bold text-slate-100">Total</span>
-              <span className="text-5xl font-black tracking-tight text-[#a9c7ff]">{formatCurrency(total)}</span>
+              <span className="text-[20px] font-black uppercase tracking-[0.06em] text-[#5c95bd]">Total</span>
+              <div className="text-right">
+                <div className="text-[44px] font-black tracking-[-0.08em] leading-none text-[#1f6dad] md:text-[56px]">{formatCurrency(total)}</div>
+                <div className="mt-2 text-[12px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Including VAT</div>
+              </div>
             </div>
 
-            <div className="mt-10 border-t border-white/5 pt-8">
-              <div className="flex items-start gap-4">
-                <MapPin size={24} className="mt-1 text-slate-400" />
-                <div className="text-xl leading-relaxed text-slate-300">
-                  <div className="font-bold text-slate-100">Shipping To</div>
-                  <div className="mt-3">{shippingName || 'Shipping contact not set'}</div>
+            <div className="mt-8 border-t border-[#c4dcec] pt-6">
+              <div className="flex items-start gap-3">
+                <MapPin size={18} className="mt-0.5 shrink-0 text-[#5c95bd]" />
+                <div className="text-[14px] leading-relaxed text-[#1a3f6f]">
+                  <div className="font-black text-[#1f6dad]">Shipping To</div>
+                  <div className="mt-2">{shippingName || 'Shipping contact not set'}</div>
                   <div>{order?.shipping_address.street ?? checkoutShippingAddress?.street ?? 'Street address not set'}</div>
                   <div>{[
                     order?.shipping_address.city ?? checkoutShippingAddress?.city,
@@ -2489,10 +2512,10 @@ function OrderConfirmedView({
         </div>
       </main>
 
-      <footer className="border-t border-white/5 px-8 py-10 text-sm uppercase tracking-[0.24em] text-slate-500 md:px-16">
+      <footer className="bg-[#1a3f6f] px-8 py-10 md:px-16">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>© 2026 HAVTEL TECHNOLOGY. ALL RIGHTS RESERVED.</div>
-          <div className="flex flex-wrap gap-6">
+          <div className="text-xs font-bold uppercase tracking-[0.16em] text-white/50">© 2026 HAVTEL CORP. All Rights Reserved</div>
+          <div className="flex flex-wrap gap-6 text-xs font-bold uppercase tracking-[0.16em] text-white/50">
             <span>Privacy Policy</span>
             <span>Terms of Service</span>
             <span>Help Center</span>
@@ -2573,7 +2596,7 @@ function TrackOrderView({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(24,98,126,0.14),transparent_25%),#0f141b] text-slate-100"
+      className="min-h-screen bg-[linear-gradient(90deg,#ffffff_0%,#fbf7f4_72%,#fff6df_100%)] text-[#1a3f6f]"
     >
       <CheckoutHeader
         activeStep="tracking"
@@ -2583,39 +2606,39 @@ function TrackOrderView({
       />
 
       <main className="mx-auto max-w-[1600px] px-8 py-14 md:px-16">
-        <div className="grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,1fr)_440px]">
           <section>
-            <div className="mb-12">
-              <span className="mb-4 block text-sm font-bold uppercase tracking-[0.34em] text-[#b5cbff]">Shipment Tracking</span>
-              <h1 className="text-6xl font-black tracking-tighter md:text-7xl">Track Your Order</h1>
-              <p className="mt-6 max-w-3xl text-2xl leading-relaxed text-slate-400">
-                Follow your hardware package in real time and review the latest fulfillment milestones for order `{order?.order_number ?? '...'}`.
+            <div className="mb-10">
+              <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.14em] text-[#5c95bd]">Shipment Tracking</span>
+              <h1 className="text-5xl font-black uppercase tracking-[-0.08em] text-[#1f6dad] md:text-[72px] md:leading-none">Track Your Order</h1>
+              <p className="mt-5 max-w-3xl text-[20px] italic leading-relaxed text-[#5d95bc]">
+                Follow your hardware package in real time and review the latest fulfillment milestones for order {order?.order_number ?? '...'}.
               </p>
             </div>
 
-            <div className="rounded-[30px] border border-white/5 bg-[#171d26] p-8 md:p-10">
+            <div className="rounded-[22px] border border-[#d6e4ec] bg-white p-7 shadow-[0_16px_34px_rgba(107,154,187,0.12)] md:p-10">
               {isLoadingOrder ? (
-                <p className="mb-8 rounded-2xl border border-[#75d3ff]/20 bg-[#75d3ff]/10 px-4 py-3 text-sm text-[#d6f2ff]">
+                <p className="mb-6 rounded-[14px] border border-[#7eb7db] bg-[#deeef7] px-4 py-3 text-sm font-bold text-[#1f6dad]">
                   Loading your latest tracking details...
                 </p>
               ) : null}
               {orderError ? (
-                <p className="mb-8 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">{orderError}</p>
+                <p className="mb-6 rounded-[14px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-600">{orderError}</p>
               ) : null}
 
               {/* Status header */}
               <div className="mb-10 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
                 <div>
-                  <div className="text-sm font-bold uppercase tracking-[0.3em] text-slate-400">Current Status</div>
-                  <div className="mt-3 text-4xl font-black capitalize text-[#9dd6ff]">{order?.status?.replaceAll('_', ' ') ?? 'Loading'}</div>
+                  <div className="text-[12px] font-black uppercase tracking-[0.14em] text-[#5c95bd]">Current Status</div>
+                  <div className="mt-2 text-4xl font-black capitalize text-[#1f6dad]">{order?.status?.replaceAll('_', ' ') ?? 'Loading'}</div>
                 </div>
                 {order?.carrier_tracking_number ? (
-                  <div className="text-right">
-                    <div className="text-sm text-slate-500">{order.carrier ?? 'Carrier'}</div>
-                    <div className="font-mono text-xl font-bold text-[#9dd6ff]">{order.carrier_tracking_number}</div>
+                  <div className="text-left md:text-right">
+                    <div className="text-[12px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">{order.carrier ?? 'Carrier'}</div>
+                    <div className="font-mono text-xl font-bold text-[#1f6dad]">{order.carrier_tracking_number}</div>
                   </div>
                 ) : (
-                  <div className="text-lg text-slate-500">{order?.tracking_code ? `Ref: ${order.tracking_code}` : 'Tracking pending'}</div>
+                  <div className="text-base font-bold text-[#5c95bd]">{order?.tracking_code ? `Ref: ${order.tracking_code}` : 'Tracking pending'}</div>
                 )}
               </div>
 
@@ -2630,42 +2653,42 @@ function TrackOrderView({
                   return (
                     <div key={step.key} className="flex flex-1 items-center">
                       <div className="flex flex-col items-center gap-2">
-                        <div className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-black transition-colors ${done ? 'bg-[#9ee3ff] text-[#041521]' : current ? 'bg-[#223b53] text-[#b9d1ff] ring-2 ring-[#4a7fa8]' : 'bg-[#1c2433] text-slate-600'}`}>
+                        <div className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-black transition-colors ${done ? 'bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] text-white' : current ? 'bg-[#deeef7] text-[#1f6dad] ring-2 ring-[#7eb7db]' : 'bg-[#f0f5fb] text-[#c4dcec]'}`}>
                           {done ? <Check size={16} /> : <span>{index + 1}</span>}
                         </div>
-                        <span className={`text-center text-[10px] font-bold uppercase tracking-wide ${done || current ? 'text-slate-300' : 'text-slate-600'}`}>
+                        <span className={`text-center text-[10px] font-bold uppercase tracking-wide ${done || current ? 'text-[#1f6dad]' : 'text-[#b0c8dc]'}`}>
                           {step.label}
                         </span>
                       </div>
                       {index < PIPELINE_STEPS.length - 1 && (
-                        <div className={`mb-5 h-[2px] flex-1 ${done ? 'bg-[#5abaf0]' : 'bg-white/8'}`} />
+                        <div className={`mb-5 h-[2px] flex-1 ${done ? 'bg-[#7eb7db]' : 'bg-[#e8f1f7]'}`} />
                       )}
                     </div>
                   );
                 })}
               </div>
 
-              {/* Real status history */}
+              {/* Activity log */}
               <div>
-                <div className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Activity Log</div>
+                <div className="mb-4 text-[11px] font-black uppercase tracking-[0.2em] text-[#5c95bd]">Activity Log</div>
                 {(order?.status_history ?? []).length === 0 ? (
-                  <p className="text-slate-500">No activity recorded yet.</p>
+                  <p className="text-[15px] text-[#5c95bd]">No activity recorded yet.</p>
                 ) : (
                   <div className="space-y-5">
                     {(order?.status_history ?? []).map((entry) => (
                       <div key={entry.id} className="flex gap-4">
                         <div className="flex flex-col items-center">
-                          <div className="h-3 w-3 flex-shrink-0 rounded-full bg-[#4a7fa8] ring-4 ring-[#4a7fa8]/20" />
-                          <div className="mt-2 w-[1px] flex-1 bg-white/8" />
+                          <div className="h-3 w-3 flex-shrink-0 rounded-full bg-[#7eb7db] ring-4 ring-[#deeef7]" />
+                          <div className="mt-2 w-[1px] flex-1 bg-[#c4dcec]" />
                         </div>
                         <div className="pb-4">
-                          <div className="text-base font-bold capitalize text-slate-200">
+                          <div className="text-[15px] font-black capitalize text-[#1f6dad]">
                             {entry.new_status.replaceAll('_', ' ')}
                           </div>
                           {entry.note ? (
-                            <p className="mt-1 text-sm text-slate-400">{entry.note}</p>
+                            <p className="mt-1 text-sm text-[#5c95bd]">{entry.note}</p>
                           ) : null}
-                          <p className="mt-1 text-xs text-slate-600">
+                          <p className="mt-1 text-xs text-[#8cb8d4]">
                             {new Date(entry.created_at).toLocaleString()}
                           </p>
                         </div>
@@ -2680,69 +2703,73 @@ function TrackOrderView({
               <button
                 type="button"
                 onClick={onBackToOrders}
-                className="rounded-[22px] border border-white/10 px-8 py-5 text-xl font-bold text-[#b9d1ff] transition-colors hover:bg-white/5"
+                className="inline-flex items-center justify-center rounded-[14px] border-2 border-[#7eb7db] px-8 py-5 text-lg font-black text-[#1f6dad] transition-colors hover:bg-[#deeef7]"
               >
                 Back to Orders
               </button>
               <button
                 type="button"
                 onClick={onContinueShopping}
-                className="rounded-[22px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-5 text-xl font-bold text-[#02182d] shadow-[0_24px_60px_rgba(77,147,247,0.35)]"
+                className="inline-flex items-center justify-center rounded-[14px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-8 py-5 text-lg font-black text-white shadow-[0_14px_30px_rgba(13,77,138,0.22)] transition-transform hover:scale-[1.01]"
               >
                 Continue Shopping
               </button>
             </div>
           </section>
 
-          <aside className="space-y-8">
-            <div className="rounded-[32px] border border-white/5 bg-[#232831] p-8 shadow-[0_30px_80px_rgba(0,0,0,0.3)]">
-              <div className="mb-8 flex items-center justify-between gap-4">
-                <h2 className="text-4xl font-black tracking-tight">Tracking Summary</h2>
-                <span className="rounded-full bg-white/6 px-4 py-2 text-lg text-slate-300">{order?.tracking_code ?? 'Pending'}</span>
+          <aside className="space-y-6">
+            <div className="h-fit rounded-[22px] border-[5px] border-[#7eb7db] bg-[rgba(255,250,241,0.92)] p-7 shadow-[0_16px_34px_rgba(107,154,187,0.16)] xl:sticky xl:top-10">
+              <div className="mb-6 flex items-center justify-between gap-4">
+                <h2 className="text-[24px] font-black tracking-[-0.06em] text-[#1f6dad] md:text-[30px]">Tracking Summary</h2>
+                <span className="rounded-full bg-[#e8f4fc] px-3 py-1.5 text-[11px] font-black text-[#1f6dad]">{order?.tracking_code ?? 'Pending'}</span>
               </div>
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {(order?.items ?? []).length > 0 ? (
-                  (order?.items ?? []).map((item) => {
-                    return (
-                      <div key={item.id} className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-4">
-                          <div className="h-16 w-16 overflow-hidden rounded-xl bg-[#0b1016]">
-                            {item.product_image_url ? (
-                              <img src={item.product_image_url} alt={item.product_name} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
-                            ) : null}
-                          </div>
-                          <div>
-                            <div className="text-xl font-bold text-slate-100">{item.product_name}</div>
-                            <div className="text-base text-slate-400">Qty: {item.quantity}</div>
-                          </div>
+                  (order?.items ?? []).map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-[10px] bg-[linear-gradient(180deg,#8ec4e3_0%,#7db8dd_100%)]">
+                          {item.product_image_url ? (
+                            <img src={item.product_image_url} alt={item.product_name} className="h-full w-full object-contain p-1" referrerPolicy="no-referrer" />
+                          ) : null}
                         </div>
-                        <span className="text-lg text-slate-300">{formatCurrency(Number(item.unit_price) * item.quantity)}</span>
+                        <div className="min-w-0">
+                          <div className="truncate text-[14px] font-black text-[#1f6dad]">{item.product_name}</div>
+                          <div className="text-[12px] text-[#5c95bd]">Qty: {item.quantity}</div>
+                        </div>
                       </div>
-                    );
-                  })
+                      <span className="shrink-0 text-[14px] font-black text-[#1f6dad]">{formatCurrency(Number(item.unit_price) * item.quantity)}</span>
+                    </div>
+                  ))
                 ) : (
-                  <div className="rounded-2xl border border-white/5 bg-white/[0.03] px-4 py-5 text-base text-slate-400">
-                    Your order items will appear here once the order details finish loading.
+                  <div className="rounded-[14px] border border-[#d6e4ec] bg-white px-4 py-4 text-[14px] text-[#5c95bd]">
+                    Order items will appear here once details finish loading.
                   </div>
                 )}
               </div>
-              <div className="my-8 border-t border-white/5"></div>
-              <div className="space-y-4 text-lg">
-                <div className="flex items-center justify-between"><span className="text-slate-300">Subtotal</span><span>{formatCurrency(Number(order?.subtotal_amount ?? 0))}</span></div>
-                <div className="flex items-center justify-between"><span className="text-slate-300">Shipping</span><span>{formatCurrency(Number(order?.shipping_amount ?? 0))}</span></div>
-                <div className="flex items-center justify-between"><span className="text-slate-300">Tax</span><span>{formatCurrency(Number(order?.tax_amount ?? 0))}</span></div>
+              <div className="my-5 border-t border-[#c4dcec]"></div>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-4"><span className="text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Subtotal</span><span className="text-[14px] font-black text-[#1f6dad]">{formatCurrency(Number(order?.subtotal_amount ?? 0))}</span></div>
+                <div className="flex items-center justify-between gap-4"><span className="text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Shipping</span><span className="text-[14px] font-black text-[#1f6dad]">{formatCurrency(Number(order?.shipping_amount ?? 0))}</span></div>
+                <div className="flex items-center justify-between gap-4"><span className="text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Tax</span><span className="text-[14px] font-black text-[#1f6dad]">{formatCurrency(Number(order?.tax_amount ?? 0))}</span></div>
               </div>
-              <div className="my-8 border-t border-white/5"></div>
+              <div className="my-5 border-t border-[#7eb7db]"></div>
               <div className="flex items-end justify-between gap-4">
-                <span className="text-2xl font-bold text-slate-100">Total</span>
-                <span className="text-5xl font-black tracking-tight text-[#a9c7ff]">{formatCurrency(Number(order?.total_amount ?? 0))}</span>
+                <span className="text-[18px] font-black uppercase tracking-[0.06em] text-[#5c95bd]">Total</span>
+                <div className="text-right">
+                  <div className="text-[40px] font-black tracking-[-0.08em] leading-none text-[#1f6dad] md:text-[48px]">{formatCurrency(Number(order?.total_amount ?? 0))}</div>
+                  <div className="mt-1 text-[11px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Including VAT</div>
+                </div>
               </div>
             </div>
 
-            <div className="rounded-[28px] border border-white/5 bg-[#161c24] p-8">
-              <div className="text-sm font-bold uppercase tracking-[0.32em] text-[#b5cbff] mb-6">Destination</div>
-              <div className="space-y-2 text-xl text-slate-300">
-                <div>{order?.shipping_address.contact_name ?? 'Shipping contact pending'}</div>
+            <div className="rounded-[22px] border border-[#d6e4ec] bg-white p-7 shadow-[0_16px_34px_rgba(107,154,187,0.12)]">
+              <div className="mb-4 flex items-center gap-3">
+                <MapPin size={18} className="shrink-0 text-[#5c95bd]" />
+                <span className="text-[12px] font-black uppercase tracking-[0.14em] text-[#5c95bd]">Destination</span>
+              </div>
+              <div className="space-y-1 text-[15px] leading-relaxed text-[#1a3f6f]">
+                <div className="font-black text-[#1f6dad]">{order?.shipping_address.contact_name ?? 'Shipping contact pending'}</div>
                 <div>{order?.shipping_address.street ?? 'Street pending'}</div>
                 <div>{[order?.shipping_address.city, order?.shipping_address.state, order?.shipping_address.postal_code].filter(Boolean).join(', ') || 'Location pending'}</div>
                 <div>{order?.shipping_address.country ?? 'Country pending'}</div>
@@ -2752,10 +2779,10 @@ function TrackOrderView({
         </div>
       </main>
 
-      <footer className="border-t border-white/5 px-8 py-10 text-sm uppercase tracking-[0.24em] text-slate-500 md:px-16">
+      <footer className="bg-[#1a3f6f] px-8 py-10 md:px-16">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>© 2026 HAVTEL TECHNOLOGY. ALL RIGHTS RESERVED.</div>
-          <div className="flex flex-wrap gap-6">
+          <div className="text-xs font-bold uppercase tracking-[0.16em] text-white/50">© 2026 HAVTEL CORP. All Rights Reserved</div>
+          <div className="flex flex-wrap gap-6 text-xs font-bold uppercase tracking-[0.16em] text-white/50">
             <span>Privacy Policy</span>
             <span>Terms of Service</span>
             <span>Help Center</span>
@@ -4313,37 +4340,26 @@ function Account({
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.35fr)_320px] gap-8 xl:gap-12 items-start">
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-              {accountSections.map((section) => (
-                <button
-                  key={section.title}
-                  type="button"
-                  onClick={() => {
-                    if (section.id === 'orders') {
-                      onOpenOrders();
-                      return;
-                    }
-
-                    setSelectedSection(section.id);
-                  }}
-                  className={`group text-left rounded-2xl border p-6 shadow-[0_2px_16px_rgba(26,63,111,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_24px_rgba(26,63,111,0.25)] ${
-                    selectedSection === section.id
-                      ? 'border-[#1a3f6f] bg-[#1f4d80]'
-                      : 'border-[#1a3f6f] bg-[#255a8a] hover:bg-[#1f4d80]'
-                  }`}
-                >
-                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 text-white mb-5">
-                    <section.icon size={22} />
-                  </div>
-                  <h2 className="text-base font-bold tracking-tight text-white mb-2">{section.title}</h2>
-                  <p className="text-sm text-blue-100/80 leading-relaxed">{section.description}</p>
-                </button>
-              ))}
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <button
+              type="button"
+              onClick={() => setSelectedSection('personal')}
+              className={`group text-left rounded-2xl border p-6 shadow-[0_2px_16px_rgba(26,63,111,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_24px_rgba(26,63,111,0.25)] md:col-start-1 md:row-start-1 ${
+                selectedSection === 'personal'
+                  ? 'border-[#1a3f6f] bg-[#1f4d80]'
+                  : 'border-[#1a3f6f] bg-[#255a8a] hover:bg-[#1f4d80]'
+              }`}
+            >
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 text-white mb-5">
+                <CircleUserRound size={22} />
+              </div>
+              <h2 className="text-base font-bold tracking-tight text-white mb-2">Personal Information</h2>
+              <p className="text-sm text-blue-100/80 leading-relaxed">Review and update your account identity, saved preferences, and billing basics.</p>
+            </button>
 
             {selectedSection === 'personal' && (
-              <div className="rounded-2xl border-4 border-[#1a3f6f] bg-white p-6 md:p-8 shadow-[0_2px_12px_rgba(26,63,111,0.08)]">
+              <div className="md:col-span-3 md:col-start-1 md:row-start-2">
+                <div className="rounded-2xl border-4 border-[#1a3f6f] bg-white p-6 md:p-8 shadow-[0_2px_12px_rgba(26,63,111,0.08)]">
                 <div className="mb-7">
                   <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-2">Profile Details</span>
                   <h3 className="text-2xl font-bold tracking-tight text-[#1a3f6f] mb-2">
@@ -4476,10 +4492,28 @@ function Account({
                   </div>
                 </form>
               </div>
+              </div>
             )}
 
+            <button
+              type="button"
+              onClick={() => setSelectedSection('delivery')}
+              className={`group text-left rounded-2xl border p-6 shadow-[0_2px_16px_rgba(26,63,111,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_24px_rgba(26,63,111,0.25)] md:col-start-2 md:row-start-1 ${
+                selectedSection === 'delivery'
+                  ? 'border-[#1a3f6f] bg-[#1f4d80]'
+                  : 'border-[#1a3f6f] bg-[#255a8a] hover:bg-[#1f4d80]'
+              }`}
+            >
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 text-white mb-5">
+                <MapPin size={22} />
+              </div>
+              <h2 className="text-base font-bold tracking-tight text-white mb-2">Delivery Contacts</h2>
+              <p className="text-sm text-blue-100/80 leading-relaxed">Manage shipping recipients, addresses, and preferred drop-off instructions.</p>
+            </button>
+
             {selectedSection === 'delivery' && (
-              <div className="rounded-2xl border-4 border-[#1a3f6f] bg-white p-6 md:p-8 shadow-[0_2px_12px_rgba(26,63,111,0.08)]">
+              <div className="md:col-span-3 md:col-start-1 md:row-start-2">
+                <div className="rounded-2xl border-4 border-[#1a3f6f] bg-white p-6 md:p-8 shadow-[0_2px_12px_rgba(26,63,111,0.08)]">
                 <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-5 mb-7">
                   <div>
                     <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-2">Shipping Directory</span>
@@ -4833,7 +4867,20 @@ function Account({
                   ))}
                 </div>
               </div>
+              </div>
             )}
+
+            <button
+              type="button"
+              onClick={onOpenOrders}
+              className="group text-left rounded-2xl border p-6 shadow-[0_2px_16px_rgba(26,63,111,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_24px_rgba(26,63,111,0.25)] border-[#1a3f6f] bg-[#255a8a] hover:bg-[#1f4d80] md:col-start-3 md:row-start-1"
+            >
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 text-white mb-5">
+                <Package size={22} />
+              </div>
+              <h2 className="text-base font-bold tracking-tight text-white mb-2">Order History & Details</h2>
+              <p className="text-sm text-blue-100/80 leading-relaxed">Track previous purchases, inspect order details, and follow current fulfillment.</p>
+            </button>
           </div>
 
           <div className="rounded-2xl border-4 border-[#1a3f6f] bg-white p-6 md:p-8 shadow-[0_2px_12px_rgba(26,63,111,0.08)]">
