@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { trackPageView } from './lib/analytics';
+import { setPageMeta, usePageMeta } from './hooks/usePageMeta';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 
@@ -90,6 +92,17 @@ import {
 } from './lib/api';
 
 type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot';
+
+const PAGE_META: Partial<Record<View, { title: string; description: string }>> = {
+  home:     { title: 'Havtel',    description: 'Premium tech hardware — servers, networking gear, and more.' },
+  shop:     { title: 'Shop',      description: 'Browse our full catalog of hardware and tech products.' },
+  support:  { title: 'Support',   description: 'Get help with your Havtel orders and products.' },
+  account:  { title: 'My Account', description: '' },
+  orders:   { title: 'My Orders', description: '' },
+  cart:     { title: 'Cart',      description: '' },
+  shipping: { title: 'Checkout',  description: '' },
+  payment:  { title: 'Payment',   description: '' },
+};
 
 interface Product {
   id: string;
@@ -450,6 +463,7 @@ export default function App() {
   const [checkoutResponse, setCheckoutResponse] = useState<CheckoutResponse | null>(null);
   const [isInitiatingCheckout, setIsInitiatingCheckout] = useState(false);
   const [latestOrder, setLatestOrder] = useState<Order | null>(null);
+  const [stripeReturnOrderId, setStripeReturnOrderId] = useState<string | null>(null);
   const [isMaintenance, setIsMaintenance] = useState(false);
   const [trackedOrderId, setTrackedOrderId] = useState<string | null>(initialRoute.trackedOrderId);
   const isAuthenticated = authSession !== null;
@@ -489,10 +503,15 @@ export default function App() {
         return;
       }
 
-      await addCartItemRequest(authSession.access_token, {
-        variant_id: variant.id,
-        quantity,
-      });
+      const existingItem = cartItems.find((item) => item.variantId === variant.id);
+      if (existingItem) {
+        await updateCartItemRequest(authSession.access_token, variant.id, existingItem.quantity + quantity);
+      } else {
+        await addCartItemRequest(authSession.access_token, {
+          variant_id: variant.id,
+          quantity,
+        });
+      }
 
       const primaryImg =
         detail.images.find((img) => img.is_primary && !img.variant_id)?.url ??
@@ -587,6 +606,12 @@ export default function App() {
     if (currentPath !== nextPath) {
       window.history.pushState(null, '', nextPath);
     }
+
+    if (view !== 'product') {
+      const meta = PAGE_META[view];
+      if (meta) setPageMeta(meta.title, meta.description);
+    }
+    trackPageView(nextPath, document.title);
   }, [view, selectedProductSlug, trackedOrderId]);
 
   // Load products and categories from API
@@ -661,6 +686,53 @@ export default function App() {
       // localStorage unavailable (private mode, storage full, etc.)
     }
   }, [cartItems]);
+
+  // Scroll to top on every view change
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [view]);
+
+  // Detect Stripe redirect return (3D Secure / redirect-based payment methods)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const redirectStatus = params.get('redirect_status');
+    const hasStripeParams = params.has('payment_intent_client_secret');
+
+    if (!hasStripeParams) return;
+
+    // Strip Stripe params from URL so they don't persist on refresh
+    window.history.replaceState({}, '', window.location.pathname);
+
+    const pendingOrderId = sessionStorage.getItem('havtel.stripe.pending_order_id');
+    sessionStorage.removeItem('havtel.stripe.pending_order_id');
+
+    if (redirectStatus === 'succeeded') {
+      setStripeReturnOrderId(pendingOrderId);
+      setView('confirmed');
+    } else {
+      setAuthError('Your payment was not completed. Please try again.');
+      setView('cart');
+    }
+  }, []);
+
+  // Once auth is ready, fetch the order for a successful Stripe redirect return
+  useEffect(() => {
+    if (!stripeReturnOrderId || !authSession?.access_token) return;
+
+    const orderId = stripeReturnOrderId;
+    setStripeReturnOrderId(null);
+
+    void (async () => {
+      try {
+        const order = await getOrderRequest(authSession.access_token, orderId);
+        setLatestOrder(order);
+        setTrackedOrderId(order.id);
+      } catch {
+        // best-effort — confirmed screen still shows without order details
+      }
+      setCartItems([]);
+    })();
+  }, [stripeReturnOrderId, authSession?.access_token]);
 
   const requireAuthForView = (nextView: View) => {
     if (isAuthenticated) {
@@ -867,6 +939,7 @@ export default function App() {
         })
       );
       setCheckoutResponse(result);
+      sessionStorage.setItem('havtel.stripe.pending_order_id', result.order_id);
       setView('payment');
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 401)) {
@@ -2863,6 +2936,28 @@ function ProductDetailView({
     `Engineered for the next generation of computational dominance. The ${productName} leverages Havtel's proprietary photonic-bridge architecture to deliver unprecedented throughput.`;
   const relatedProducts = allProducts.filter((p) => p.slug !== productSlug).slice(0, 4);
 
+  usePageMeta({
+    title: apiProduct?.name ?? '',
+    description: productDescription,
+    ogImage: heroImage ?? undefined,
+  });
+
+  const jsonLd = apiProduct ? JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: apiProduct.name,
+    description: productDescription,
+    image: heroImage,
+    offers: {
+      '@type': 'Offer',
+      priceCurrency: 'USD',
+      price: selectedVariant?.price ?? '0',
+      availability: inStock
+        ? 'https://schema.org/InStock'
+        : 'https://schema.org/OutOfStock',
+    },
+  }) : null;
+
   if (!apiProduct) {
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pt-20 min-h-screen flex items-center justify-center bg-[linear-gradient(90deg,#ffffff_0%,#fbf7f4_72%,#fff6df_100%)]">
@@ -2887,6 +2982,7 @@ function ProductDetailView({
       exit={{ opacity: 0 }}
       className="min-h-screen bg-[linear-gradient(90deg,#ffffff_0%,#fbf7f4_72%,#fff6df_100%)] pt-20"
     >
+      {jsonLd && <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />}
       <section className="relative overflow-hidden px-6 py-10 md:px-12 xl:px-20 xl:py-14">
         <div className="absolute inset-0">
           <div className="absolute left-[-8%] top-[9%] h-[420px] w-[420px] rounded-full bg-[#e4f3fb] blur-[120px]"></div>

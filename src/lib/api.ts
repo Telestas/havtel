@@ -452,6 +452,7 @@ export type PickupPointPublic = {
   country: string;
   phone: string | null;
   notes: string | null;
+  fulfillment_priority: number;
 };
 
 export async function listPickupPointsRequest(): Promise<PickupPointPublic[]> {

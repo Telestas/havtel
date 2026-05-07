@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /account
+Disallow: /orders
+Disallow: /cart
+Disallow: /checkout
+
+Sitemap: https://store.havtel.com/sitemap.xml
