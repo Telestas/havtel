@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { trackPageView } from './lib/analytics';
 import { setPageMeta, usePageMeta } from './hooks/usePageMeta';
 import { loadStripe } from '@stripe/stripe-js';
@@ -129,6 +129,7 @@ interface CartItem {
   quantity: number;
   price: number;
   img: string | null;
+  maxStock?: number;
 }
 
 type CheckoutShippingAddress = {
@@ -552,6 +553,44 @@ export default function App() {
     setView('product');
   };
 
+  const handleReorder = async (order: Order): Promise<{ added: number; skipped: number }> => {
+    if (!authSession?.access_token) {
+      setView('login');
+      return { added: 0, skipped: 0 };
+    }
+    const token = authSession.access_token;
+    const reorderableItems = order.items.filter((item) => item.variant_id != null);
+    let added = 0;
+    let skipped = 0;
+    for (const item of reorderableItems) {
+      try {
+        const existing = cartItems.find((ci) => ci.variantId === item.variant_id);
+        if (existing) {
+          await updateCartItemRequest(token, item.variant_id!, existing.quantity + item.quantity);
+        } else {
+          await addCartItemRequest(token, { variant_id: item.variant_id!, quantity: item.quantity });
+        }
+        added++;
+      } catch {
+        skipped++;
+      }
+    }
+    // Refresh cart from server after bulk add
+    try {
+      const cart = await getCartRequest(token);
+      setCartItems(cart.items.map((si) => ({
+        variantId: si.variant_id,
+        productSlug: '',
+        productName: si.variant.name,
+        variantName: si.variant.name,
+        quantity: si.quantity,
+        price: parseFloat(si.unit_price),
+        img: null,
+      })));
+    } catch { /* keep stale state if refresh fails */ }
+    return { added, skipped };
+  };
+
   useEffect(() => {
     // Check on mount and poll every 30 s so maintenance activates without needing a failed request.
     const check = async () => {
@@ -647,6 +686,7 @@ export default function App() {
           quantity: si.quantity,
           price: parseFloat(si.unit_price),
           img: null,
+          maxStock: si.qty_available,
         }));
         setCartItems((prev: CartItem[]) => {
           const isFirstSync = !isFirstCartSyncDoneRef.current;
@@ -1227,6 +1267,9 @@ export default function App() {
           <ShoppingBagView
             key="cart"
             cartItems={cartItems}
+            staleCartWarning={cartItems.some(
+              (i) => i.maxStock !== undefined && i.quantity > i.maxStock,
+            )}
             onClose={() => setView('shop')}
             onGoHome={() => setView('home')}
             onProceedToShipping={() => requireAuthForView('shipping')}
@@ -1249,17 +1292,32 @@ export default function App() {
             onIncreaseQuantity={async (variantId) => {
               const item = cartItems.find((i) => i.variantId === variantId);
               if (!item) return;
-              const newQty = item.quantity + 1;
+              const prevQty = item.quantity;
+              const newQty = prevQty + 1;
               setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: newQty } : i));
               if (authSession?.access_token) {
-                await updateCartItemRequest(authSession.access_token, variantId, newQty).catch(() => {});
+                try {
+                  await updateCartItemRequest(authSession.access_token, variantId, newQty);
+                } catch (err) {
+                  setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: prevQty } : i));
+                  setNotification(err instanceof ApiError ? err.message : 'Could not update quantity');
+                  setTimeout(() => setNotification(null), 3000);
+                }
               }
             }}
             onSetQuantity={async (variantId, qty) => {
+              const item = cartItems.find((i) => i.variantId === variantId);
+              const prevQty = item?.quantity ?? 1;
               const newQty = Math.max(1, qty);
               setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: newQty } : i));
               if (authSession?.access_token) {
-                await updateCartItemRequest(authSession.access_token, variantId, newQty).catch(() => {});
+                try {
+                  await updateCartItemRequest(authSession.access_token, variantId, newQty);
+                } catch (err) {
+                  setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: prevQty } : i));
+                  setNotification(err instanceof ApiError ? err.message : 'Could not update quantity');
+                  setTimeout(() => setNotification(null), 3000);
+                }
               }
             }}
             onRemoveItem={async (variantId) => {
@@ -1275,10 +1333,12 @@ export default function App() {
             authSession={authSession}
             onBackToAccount={() => setView('account')}
             onGoHome={() => setView('home')}
+            onGoToCart={() => setView('cart')}
             onTrackOrder={(orderId) => {
               setTrackedOrderId(orderId);
               setView('tracking');
             }}
+            onReorder={handleReorder}
           />
         ) : view === 'account' ? (
           <Account
@@ -1362,6 +1422,7 @@ export default function App() {
 
 function ShoppingBagView({
   cartItems,
+  staleCartWarning,
   onClose,
   onGoHome,
   onProceedToShipping,
@@ -1371,6 +1432,7 @@ function ShoppingBagView({
   onRemoveItem,
 }: {
   cartItems: CartItem[];
+  staleCartWarning?: boolean;
   onClose: () => void;
   onGoHome: () => void;
   onProceedToShipping: () => void;
@@ -1410,6 +1472,18 @@ function ShoppingBagView({
               </div>
             </div>
 
+            {staleCartWarning && (
+              <div className="mb-6 flex items-start gap-3 rounded-2xl border border-amber-400/60 bg-amber-50 px-5 py-4 text-amber-800">
+                <svg className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+                <div>
+                  <p className="font-bold text-sm">Your cart has been updated</p>
+                  <p className="mt-0.5 text-sm leading-relaxed">Some items have limited availability since you last visited. Review quantities before checking out.</p>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-6">
               {cartItems.map((item) => (
                 <div
@@ -1433,6 +1507,11 @@ function ShoppingBagView({
                         <div>
                           <h2 className="text-[34px] font-black tracking-[-0.05em] text-white">{item.productName}</h2>
                           <p className="mt-2 text-[18px] italic text-white/85">{item.variantName}</p>
+                          {item.maxStock !== undefined && item.quantity > item.maxStock && (
+                            <p className="mt-2 text-[13px] font-bold text-amber-300">
+                              Only {item.maxStock} in stock — reduce quantity to proceed
+                            </p>
+                          )}
                         </div>
                         <div className="text-right">
                           <div className="text-[34px] font-black tracking-[-0.05em] text-white">
@@ -5007,55 +5086,48 @@ function OrderHistory({
   authSession,
   onBackToAccount,
   onGoHome,
+  onGoToCart,
   onTrackOrder,
+  onReorder,
 }: {
   authSession: AuthSession;
   onBackToAccount: () => void;
   onGoHome: () => void;
+  onGoToCart: () => void;
   onTrackOrder: (orderId: string) => void;
+  onReorder: (order: Order) => Promise<{ added: number; skipped: number }>;
   key?: string;
 }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
+  const [reorderingId, setReorderingId] = useState<string | null>(null);
+  const [reorderFeedback, setReorderFeedback] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadOrders = useCallback(async () => {
     if (!authSession?.access_token) {
       setOrders([]);
       setSelectedOrderId(null);
       setOrdersError(null);
       return;
     }
-
-    let cancelled = false;
-
-    const loadOrders = async () => {
-      setIsLoadingOrders(true);
-      setOrdersError(null);
-      try {
-        const nextOrders = await listOrdersRequest(authSession.access_token);
-        if (!cancelled) {
-          setOrders(nextOrders);
-          setSelectedOrderId(nextOrders[0]?.id ?? null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setOrdersError(error instanceof ApiError ? error.message : 'Unable to load your order history right now.');
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingOrders(false);
-        }
-      }
-    };
-
-    void loadOrders();
-
-    return () => {
-      cancelled = true;
-    };
+    setIsLoadingOrders(true);
+    setOrdersError(null);
+    try {
+      const nextOrders = await listOrdersRequest(authSession.access_token);
+      setOrders(nextOrders);
+      setSelectedOrderId((prev) => prev ?? nextOrders[0]?.id ?? null);
+    } catch (error) {
+      setOrdersError(error instanceof ApiError ? error.message : 'Unable to load your order history right now.');
+    } finally {
+      setIsLoadingOrders(false);
+    }
   }, [authSession?.access_token]);
+
+  useEffect(() => {
+    void loadOrders();
+  }, [loadOrders]);
 
   return (
     <motion.div
@@ -5076,6 +5148,26 @@ function OrderHistory({
         </div>
 
         <div className="rounded-2xl border-4 border-[#1a3f6f] bg-white p-4 md:p-8 shadow-[0_2px_12px_rgba(26,63,111,0.08)]">
+          <div className="mb-4 flex items-center justify-end">
+            <button
+              type="button"
+              disabled={isLoadingOrders}
+              onClick={() => void loadOrders()}
+              className="inline-flex items-center gap-2 rounded-xl border border-[#1a3f6f]/30 bg-[#f0f5fb] px-4 py-2 text-xs font-bold text-[#1a3f6f] transition-all hover:bg-[#e2ecf7] disabled:opacity-50"
+            >
+              {isLoadingOrders ? (
+                <svg className="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                </svg>
+              ) : (
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582M20 20v-5h-.581M5.635 19A9 9 0 104.582 9H4" />
+                </svg>
+              )}
+              Refresh
+            </button>
+          </div>
           {isLoadingOrders ? (
             <p className="mb-5 rounded-xl border border-[#d5e0ec] bg-[#f0f5fb] px-4 py-3 text-sm text-[#4a5c72]">Loading your orders...</p>
           ) : null}
@@ -5145,7 +5237,7 @@ function OrderHistory({
                         <span className="text-xs text-blue-100/70">Placed on {new Date(order.created_at).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</span>
                       </div>
                       <p className="text-sm text-blue-100/80 leading-relaxed mb-5 italic">
-                        {order.items.length} item(s) shipped to {order.shipping_address.city}, {order.shipping_address.state}. Tracking completed and signed at delivery.
+                        {order.items.length} item(s) · {order.shipping_method.replaceAll('_', ' ')} · {order.shipping_address.city}, {order.shipping_address.state}
                       </p>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <div className="rounded-xl border border-white/20 bg-[#1f4d80] p-4">
@@ -5160,6 +5252,69 @@ function OrderHistory({
                           <p className="text-[10px] uppercase tracking-[0.24em] text-blue-100/70 font-bold mb-1.5">Status</p>
                           <p className="text-white font-semibold text-sm uppercase tracking-wide">{order.status.replaceAll('_', ' ')}</p>
                         </div>
+                      </div>
+                      {order.items.length > 0 && (
+                        <div className="mt-4">
+                          <p className="text-[10px] uppercase tracking-[0.24em] text-blue-100/70 font-bold mb-2">Items</p>
+                          <div className="space-y-2">
+                            {order.items.map((item) => (
+                              <div key={item.id} className="flex items-center gap-3 rounded-xl border border-white/10 bg-[#1f4d80] p-3">
+                                {item.product_image_url ? (
+                                  <img
+                                    src={item.product_image_url}
+                                    alt={item.product_name}
+                                    className="h-12 w-12 flex-shrink-0 rounded-lg bg-white/10 object-contain p-1"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                ) : (
+                                  <div className="h-12 w-12 flex-shrink-0 rounded-lg bg-white/10" />
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-semibold text-white">{item.product_name}</p>
+                                  <p className="truncate text-xs italic text-blue-100/70">{item.variant_name}</p>
+                                </div>
+                                <div className="flex-shrink-0 text-right">
+                                  <p className="text-sm font-bold text-white">{formatCurrency(Number(item.unit_price) * item.quantity)}</p>
+                                  {item.quantity > 1 && (
+                                    <p className="text-[11px] text-blue-100/60">{formatCurrency(Number(item.unit_price))} × {item.quantity}</p>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                        {order.items.some((i) => i.variant_id) ? (
+                          <button
+                            type="button"
+                            disabled={reorderingId === order.id}
+                            onClick={async () => {
+                              setReorderingId(order.id);
+                              setReorderFeedback(null);
+                              const { added, skipped } = await onReorder(order);
+                              setReorderingId(null);
+                              if (added > 0) {
+                                setReorderFeedback(`${added} item(s) added to cart.${skipped > 0 ? ` ${skipped} skipped (out of stock).` : ''}`);
+                                setTimeout(() => {
+                                  setReorderFeedback(null);
+                                  onGoToCart();
+                                }, 1500);
+                              } else {
+                                setReorderFeedback('Could not add items — they may be out of stock.');
+                                setTimeout(() => setReorderFeedback(null), 3000);
+                              }
+                            }}
+                            className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-[#1a3f6f] shadow hover:bg-blue-50 disabled:opacity-60 transition-all"
+                          >
+                            {reorderingId === order.id ? 'Adding to cart…' : 'Buy Again'}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-blue-100/50 italic">Reorder not available for this order</span>
+                        )}
+                        {reorderFeedback && selectedOrderId === order.id && (
+                          <span className="text-xs font-semibold text-emerald-300">{reorderFeedback}</span>
+                        )}
                       </div>
                     </div>
                   ))}

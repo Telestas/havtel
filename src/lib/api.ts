@@ -90,6 +90,7 @@ export type OrderStatus = 'confirmed' | 'processing' | 'in_transit' | 'delivered
 
 export type OrderItem = {
   id: string;
+  variant_id: string | null;
   product_name: string;
   variant_name: string;
   unit_price: string;
@@ -388,6 +389,7 @@ export type ApiCartItem = {
   quantity: number;
   unit_price: string;
   subtotal: string;
+  qty_available: number;
   variant: ApiCartItemVariant;
 };
 
