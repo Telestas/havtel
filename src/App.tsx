@@ -3045,14 +3045,21 @@ function ProductDetailView({
     );
   }
 
-  const specifications = [
-    ['Architecture', 'Lumina v4 (3nm)'],
-    ['Max Clock Speed', '5.8 GHz (Turbo)'],
-    ['L3 Cache', '128 MB'],
-    ['TDP (Standard)', '125W'],
-    ['Socket', 'Havtel LX-G1'],
-    ['Memory Type', 'DDR5-6400 MT/s'],
-  ];
+  const attrs = apiProduct.attributes as Record<string, unknown> | null | undefined;
+  const specifications: [string, string][] =
+    Array.isArray(attrs?.technical_specifications) && (attrs.technical_specifications as unknown[]).length > 0
+      ? (attrs.technical_specifications as { label: string; value: string }[]).map((s) => [s.label, s.value])
+      : [
+          ['Architecture', 'Lumina v4 (3nm)'],
+          ['Max Clock Speed', '5.8 GHz (Turbo)'],
+          ['L3 Cache', '128 MB'],
+          ['TDP (Standard)', '125W'],
+          ['Socket', 'Havtel LX-G1'],
+          ['Memory Type', 'DDR5-6400 MT/s'],
+        ];
+  const storedReviews = Array.isArray(attrs?.reviews)
+    ? (attrs.reviews as { name: string; role: string; text: string }[])
+    : null;
 
   return (
     <motion.div
@@ -3271,17 +3278,17 @@ function ProductDetailView({
                     </button>
                   </div>
                   <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
-                    {[
-                      ['Marcus Jensen', 'Lead 3D Artist', 'The transition from my previous gen to the Quantum X-8000 was night and day. Render times in Blender dropped by nearly 45%.'],
-                      ['Sarah Lin', 'Systems Engineer', 'Installation was a breeze. The thermals are incredibly stable even under 100% load during long simulation runs.'],
-                      ['David Byrne', 'Game Developer', 'High price tag, but you absolutely get what you pay for. The multi-threaded performance is unmatched in the consumer space.'],
-                    ].map(([name, role, review]) => (
+                    {(storedReviews ?? [
+                      { name: 'Marcus Jensen', role: 'Lead 3D Artist', text: 'The transition from my previous gen to the Quantum X-8000 was night and day. Render times in Blender dropped by nearly 45%.' },
+                      { name: 'Sarah Lin', role: 'Systems Engineer', text: 'Installation was a breeze. The thermals are incredibly stable even under 100% load during long simulation runs.' },
+                      { name: 'David Byrne', role: 'Game Developer', text: 'High price tag, but you absolutely get what you pay for. The multi-threaded performance is unmatched in the consumer space.' },
+                    ]).map(({ name, role, text }) => (
                       <div key={name} className="rounded-[22px] border border-[#d6e4ec] bg-white p-6 shadow-[0_12px_28px_rgba(107,154,187,0.12)]">
                         <div className="mb-4 flex items-center justify-between">
                           <div className="flex gap-1 text-[#76b7db]">{Array.from({ length: 5 }).map((_, i) => <Star key={i} size={14} fill="currentColor" />)}</div>
                           <span className="text-[10px] font-black uppercase tracking-[0.18em] text-[#7ca0b8]">Verified</span>
                         </div>
-                        <p className="text-sm leading-relaxed text-[#5d95bc]">&quot;{review}&quot;</p>
+                        <p className="text-sm leading-relaxed text-[#5d95bc]">&quot;{text}&quot;</p>
                         <div className="mt-5">
                           <div className="text-sm font-black text-[#1f6dad]">{name}</div>
                           <div className="text-xs text-[#7ca0b8]">{role}</div>
