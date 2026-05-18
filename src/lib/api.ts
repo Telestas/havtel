@@ -502,3 +502,51 @@ export async function fetchMaintenanceStatus(): Promise<boolean> {
     return false;
   }
 }
+
+// =====================================================================
+// Reservations
+// =====================================================================
+
+export type ReservationStatus = 'active' | 'expired' | 'purchased' | 'cancelled';
+
+export type ReservationVariant = {
+  id: string;
+  sku: string;
+  name: string;
+};
+
+export type Reservation = {
+  id: string;
+  variant_id: string;
+  quantity: number;
+  unit_price: string;
+  expires_at: string;
+  status: ReservationStatus;
+  subtotal: string;
+  variant: ReservationVariant;
+};
+
+export async function saveCartItemRequest(token: string, variantId: string): Promise<Reservation> {
+  return apiRequest<Reservation>(`/api/v1/reservations/from-cart/${variantId}`, {
+    method: 'POST',
+    token,
+  });
+}
+
+export async function listReservationsRequest(token: string): Promise<Reservation[]> {
+  return apiRequest<Reservation[]>('/api/v1/reservations', { token });
+}
+
+export async function cancelReservationRequest(token: string, reservationId: string): Promise<void> {
+  return apiRequest<void>(`/api/v1/reservations/${reservationId}`, {
+    method: 'DELETE',
+    token,
+  });
+}
+
+export async function restoreReservationRequest(token: string, reservationId: string): Promise<void> {
+  return apiRequest<void>(`/api/v1/reservations/${reservationId}/restore`, {
+    method: 'POST',
+    token,
+  });
+}

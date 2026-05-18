@@ -8,6 +8,7 @@ const stripePromise = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY
   ? loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string)
   : null;
 import {
+  Bookmark,
   ShoppingCart,
   User,
   CircleUserRound,
@@ -89,6 +90,11 @@ import {
   fetchMaintenanceStatus,
   listPickupPointsRequest,
   type PickupPointPublic,
+  saveCartItemRequest,
+  listReservationsRequest,
+  cancelReservationRequest,
+  restoreReservationRequest,
+  type Reservation,
 } from './lib/api';
 
 type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot';
@@ -467,6 +473,8 @@ export default function App() {
   const [stripeReturnOrderId, setStripeReturnOrderId] = useState<string | null>(null);
   const [isMaintenance, setIsMaintenance] = useState(false);
   const [trackedOrderId, setTrackedOrderId] = useState<string | null>(initialRoute.trackedOrderId);
+  const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [reservationToast, setReservationToast] = useState<{ expiresAt: string } | null>(null);
   const isAuthenticated = authSession !== null;
   const isPopNavigationRef = useRef(false);
   const initialTokenRef = useRef(authSession?.access_token ?? null);
@@ -716,6 +724,17 @@ export default function App() {
         });
       })
       .catch(() => {/* keep local cart */});
+  }, [authSession?.access_token]);
+
+  // Load active reservations from server
+  useEffect(() => {
+    if (!authSession?.access_token) {
+      setReservations([]);
+      return;
+    }
+    listReservationsRequest(authSession.access_token)
+      .then(setReservations)
+      .catch(() => {/* reservations not critical */});
   }, [authSession?.access_token]);
 
   // Persist cart to localStorage so it survives page refreshes
@@ -1326,6 +1345,48 @@ export default function App() {
                 await removeCartItemRequest(authSession.access_token, variantId).catch(() => {});
               }
             }}
+            reservations={reservations}
+            onSaveItem={async (variantId) => {
+              if (!authSession?.access_token) return;
+              try {
+                const reservation = await saveCartItemRequest(authSession.access_token, variantId);
+                setCartItems((prev) => prev.filter((i) => i.variantId !== variantId));
+                setReservations((prev) => [...prev, reservation]);
+                setReservationToast({ expiresAt: reservation.expires_at });
+                setTimeout(() => setReservationToast(null), 6000);
+              } catch (err) {
+                setNotification(err instanceof ApiError ? err.message : 'Could not save item');
+                setTimeout(() => setNotification(null), 3000);
+              }
+            }}
+            onCancelReservation={async (reservationId) => {
+              if (!authSession?.access_token) return;
+              await cancelReservationRequest(authSession.access_token, reservationId).catch(() => {});
+              setReservations((prev) => prev.filter((r) => r.id !== reservationId));
+            }}
+            onRestoreReservation={async (reservationId) => {
+              if (!authSession?.access_token) return;
+              try {
+                await restoreReservationRequest(authSession.access_token, reservationId);
+                setReservations((prev) => prev.filter((r) => r.id !== reservationId));
+                // Refresh cart to pick up restored item
+                const cart = await getCartRequest(authSession.access_token);
+                setCartItems(cart.items.map((si) => ({
+                  variantId: si.variant_id,
+                  productSlug: '',
+                  productName: si.variant.name,
+                  variantName: si.variant.name,
+                  quantity: si.quantity,
+                  price: parseFloat(si.unit_price),
+                  img: null,
+                  maxStock: si.qty_available,
+                })));
+              } catch (err) {
+                setNotification(err instanceof ApiError ? err.message : 'Could not restore item');
+                setTimeout(() => setNotification(null), 3000);
+              }
+            }}
+            reservationToast={reservationToast}
           />
         ) : view === 'orders' ? (
           <OrderHistory
@@ -1430,6 +1491,11 @@ function ShoppingBagView({
   onIncreaseQuantity,
   onSetQuantity,
   onRemoveItem,
+  reservations,
+  onSaveItem,
+  onCancelReservation,
+  onRestoreReservation,
+  reservationToast,
 }: {
   cartItems: CartItem[];
   staleCartWarning?: boolean;
@@ -1440,6 +1506,11 @@ function ShoppingBagView({
   onIncreaseQuantity: (variantId: string) => void;
   onSetQuantity: (variantId: string, qty: number) => void;
   onRemoveItem: (variantId: string) => void;
+  reservations: Reservation[];
+  onSaveItem: (variantId: string) => void;
+  onCancelReservation: (reservationId: string) => void;
+  onRestoreReservation: (reservationId: string) => void;
+  reservationToast: { expiresAt: string } | null;
   key?: string;
 }) {
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -1458,6 +1529,32 @@ function ShoppingBagView({
         onGoHome={onGoHome}
         onClose={onClose}
       />
+
+      <AnimatePresence>
+        {reservationToast && (
+          <motion.div
+            key="reservation-toast"
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed left-1/2 top-6 z-50 -translate-x-1/2 flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-6 py-4 shadow-xl md:min-w-[420px]"
+          >
+            <Bookmark size={20} className="mt-0.5 shrink-0 text-amber-500" />
+            <div>
+              <p className="text-[14px] font-black text-amber-900">Product reserved successfully</p>
+              <p className="mt-1 text-[13px] text-amber-800">
+                Reserved until{' '}
+                <strong>
+                  {new Date(reservationToast.expiresAt).toLocaleDateString(undefined, {
+                    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+                  })}
+                </strong>
+                . After this date the product will return to the store.
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <main className="mx-auto max-w-[1600px] px-8 py-14 md:px-16">
         <div className="grid grid-cols-1 gap-12 xl:grid-cols-[minmax(0,1fr)_440px]">
@@ -1550,14 +1647,25 @@ function ShoppingBagView({
                           </button>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => onRemoveItem(item.variantId)}
-                          className="inline-flex items-center gap-3 text-[15px] font-black uppercase tracking-[0.06em] text-white transition-colors hover:text-white/80"
-                        >
-                          <Trash2 size={16} />
-                          Remove
-                        </button>
+                        <div className="flex items-center gap-4">
+                          <button
+                            type="button"
+                            onClick={() => onSaveItem(item.variantId)}
+                            className="inline-flex items-center gap-2 text-[14px] font-black uppercase tracking-[0.06em] text-white/70 transition-colors hover:text-amber-300"
+                            title="Save for later"
+                          >
+                            <Bookmark size={15} />
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRemoveItem(item.variantId)}
+                            className="inline-flex items-center gap-3 text-[15px] font-black uppercase tracking-[0.06em] text-white transition-colors hover:text-white/80"
+                          >
+                            <Trash2 size={16} />
+                            Remove
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1592,6 +1700,55 @@ function ShoppingBagView({
                 </div>
               )}
             </div>
+
+            {reservations.length > 0 && (
+              <div className="mt-12">
+                <div className="mb-6 flex items-center gap-4">
+                  <Bookmark size={20} className="text-amber-500" />
+                  <h2 className="text-2xl font-black tracking-[-0.04em] text-[#1f6dad]">Saved for Later</h2>
+                  <span className="ml-auto text-[13px] font-bold text-[#5c95bd]">{reservations.length} item{reservations.length !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="space-y-4">
+                  {reservations.map((r) => {
+                    const expiresAt = new Date(r.expires_at);
+                    const expLabel = expiresAt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+                    return (
+                      <div
+                        key={r.id}
+                        className="flex flex-col gap-4 rounded-[18px] border border-amber-200 bg-amber-50/60 p-5 md:flex-row md:items-center"
+                      >
+                        <div className="flex-1">
+                          <p className="text-[17px] font-black tracking-[-0.03em] text-[#1f6dad]">{r.variant.name}</p>
+                          <p className="mt-1 text-[12px] font-mono text-[#5c95bd]">{r.variant.sku}</p>
+                          <p className="mt-2 text-[12px] font-bold text-amber-700">
+                            Reserved until {expLabel} · {r.quantity} unit{r.quantity !== 1 ? 's' : ''}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[16px] font-black text-[#1f6dad]">{formatCurrency(parseFloat(r.subtotal))}</span>
+                          <button
+                            type="button"
+                            onClick={() => onRestoreReservation(r.id)}
+                            className="inline-flex items-center gap-2 rounded-[12px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-4 py-2.5 text-[13px] font-black uppercase tracking-[0.05em] text-white shadow-md transition hover:brightness-110"
+                          >
+                            <ShoppingCart size={13} />
+                            Add to Cart
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onCancelReservation(r.id)}
+                            className="inline-flex items-center gap-2 text-[13px] font-black uppercase tracking-[0.05em] text-[#5c95bd] transition hover:text-red-500"
+                          >
+                            <Trash2 size={13} />
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </section>
 
           <aside className="h-fit rounded-[22px] border-[5px] border-[#7eb7db] bg-[rgba(255,250,241,0.92)] p-8 shadow-[0_16px_34px_rgba(107,154,187,0.16)] xl:sticky xl:top-10">
