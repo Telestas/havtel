@@ -1001,7 +1001,13 @@ export default function App() {
       sessionStorage.setItem('havtel.stripe.pending_order_id', result.order_id);
       setView('payment');
     } catch (error) {
-      if (!(error instanceof ApiError && error.status === 401)) {
+      if (error instanceof ApiError && error.status === 401) {
+        // handled by callWithRefresh
+      } else if (error instanceof ApiError && error.status === 400 && error.message === 'Cart is empty') {
+        setCartItems([]);
+        setView('bag');
+        setAuthError('Your cart is empty. Please add items before checking out.');
+      } else {
         setAuthError(error instanceof ApiError ? error.message : 'Unable to process your order right now.');
       }
     } finally {
@@ -1902,6 +1908,18 @@ function ShippingView({
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
   const [pickupPoints, setPickupPoints] = useState<PickupPointPublic[]>([]);
   const [isLoadingPickupPoints, setIsLoadingPickupPoints] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const validateShippingForm = (): boolean => {
+    const f = shippingForm;
+    const hasName = (f.firstName.trim() + f.lastName.trim()).length > 0;
+    if (!hasName || !f.email.trim() || !f.phone.trim() || !f.street.trim() || !f.city.trim() || !f.country.trim()) {
+      setFormError('Please fill in all required fields: name, email, phone, street, city, and country.');
+      return false;
+    }
+    setFormError(null);
+    return true;
+  };
 
   useEffect(() => {
     if (deliveryType !== 'warehouse_pickup') return;
@@ -1933,8 +1951,8 @@ function ShippingView({
       lastName,
       street: address.street,
       city: address.city,
-      state: address.state ?? '',
-      postalCode: address.zip_code ?? '',
+      state: address.state || 'N/A',
+      postalCode: address.zip_code || 'N/A',
       country: address.country,
     });
   };
@@ -2333,6 +2351,9 @@ function ShippingView({
                 </>
               )}
 
+              {formError && (
+                <p className="mb-3 rounded-[10px] bg-red-50 px-4 py-2 text-sm font-semibold text-red-600">{formError}</p>
+              )}
               <div className="flex flex-col gap-4 sm:flex-row">
                 <button
                   type="button"
@@ -2344,7 +2365,10 @@ function ShippingView({
                 <button
                   type="button"
                   disabled={isLoading || (isWarehousePickup && !selectedPickupPointId)}
-                  onClick={() => onProceedToPayment(isWarehousePickup ? null : shippingForm)}
+                  onClick={() => {
+                    if (!isWarehousePickup && !validateShippingForm()) return;
+                    onProceedToPayment(isWarehousePickup ? null : shippingForm);
+                  }}
                   className="rounded-[16px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-10 py-5 text-[20px] font-black text-white shadow-[0_16px_30px_rgba(13,77,138,0.24)] transition-transform hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
                 >
                   {isLoading ? 'Preparing Order…' : isWarehousePickup && !selectedPickupPointId ? 'Select a Pickup Location' : 'Proceed to Payment'}
@@ -3204,19 +3228,23 @@ function ProductDetailView({
 
   const attrs = apiProduct.attributes as Record<string, unknown> | null | undefined;
   const specifications: [string, string][] =
-    Array.isArray(attrs?.technical_specifications) && (attrs.technical_specifications as unknown[]).length > 0
+    Array.isArray(attrs?.technical_specifications)
       ? (attrs.technical_specifications as { label: string; value: string }[]).map((s) => [s.label, s.value])
-      : [
-          ['Architecture', 'Lumina v4 (3nm)'],
-          ['Max Clock Speed', '5.8 GHz (Turbo)'],
-          ['L3 Cache', '128 MB'],
-          ['TDP (Standard)', '125W'],
-          ['Socket', 'Havtel LX-G1'],
-          ['Memory Type', 'DDR5-6400 MT/s'],
-        ];
+      : [];
   const storedReviews = Array.isArray(attrs?.reviews)
     ? (attrs.reviews as { name: string; role: string; text: string }[])
     : null;
+  const reviewsEnabled = (attrs?.reviews_enabled as boolean | undefined) ?? true;
+  const descriptionEnabled = (attrs?.description_enabled as boolean | undefined) ?? true;
+  const specsEnabled = (attrs?.specs_enabled as boolean | undefined) ?? true;
+  const longDescription = (attrs?.long_description as string | undefined) || null;
+
+  const effectiveTab: 'description' | 'specs' | 'reviews' =
+    (selectedTab === 'description' && !descriptionEnabled) ||
+    (selectedTab === 'specs' && !specsEnabled) ||
+    (selectedTab === 'reviews' && !reviewsEnabled)
+      ? (descriptionEnabled ? 'description' : specsEnabled ? 'specs' : 'reviews')
+      : selectedTab;
 
   return (
     <motion.div
@@ -3372,17 +3400,17 @@ function ProductDetailView({
 
           <div className="mt-14 border-b border-[#b9d4e7]">
             <div className="flex gap-8 overflow-x-auto">
-            {[
-              ['description', 'Description'],
-              ['specs', 'Technical Specifications'],
-              ['reviews', 'Reviews (142)'],
-            ].map(([id, label]) => (
+            {([
+              ...(descriptionEnabled ? [['description', 'Description']] : []),
+              ...(specsEnabled ? [['specs', 'Technical Specifications']] : []),
+              ...(reviewsEnabled ? [['reviews', 'Reviews']] : []),
+            ] as [string, string][]).map(([id, label]) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setSelectedTab(id as 'description' | 'specs' | 'reviews')}
                 className={`border-b-[3px] px-1 py-4 text-sm font-black ${
-                  selectedTab === id ? 'border-[#76b7db] text-[#1f6dad]' : 'border-transparent text-[#7ca0b8]'
+                  effectiveTab === id ? 'border-[#76b7db] text-[#1f6dad]' : 'border-transparent text-[#7ca0b8]'
                 }`}
               >
                 {label}
@@ -3393,20 +3421,13 @@ function ProductDetailView({
 
           <div className="mt-10 grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,1fr)_420px]">
             <div>
-              {selectedTab === 'description' && (
-                <>
-                  <h2 className="text-4xl font-black tracking-[-0.06em] text-[#1f6dad] md:text-[58px]">The Future of Compute</h2>
-                  <p className="mt-6 max-w-4xl text-[20px] italic leading-[1.7] text-[#5d95bc]">
-                    The Havtel {productName} isn&apos;t just a processor; it is a paradigm shift. Utilizing the Lumina v4 microarchitecture, we have optimized every nanometer to ensure that bottlenecking is a relic of the past. Whether you are compiling massive codebases, rendering 8K cinema-grade visuals, or training deep neural networks, the {productName} adapts in real time.
-                  </p>
-                  <blockquote className="mt-8 max-w-2xl rounded-[18px] bg-[linear-gradient(90deg,#b4d7eb_0%,#c2deef_100%)] px-6 py-6 text-[18px] italic leading-[1.65] text-white shadow-[0_14px_30px_rgba(107,154,187,0.18)]">
-                    &quot;The benchmark results for the {productName} defy current expectations of a co-equal silicon. It&apos;s in a league of its own.&quot;
-                    <div className="mt-4 text-[11px] not-italic font-black uppercase tracking-[0.16em] text-white/90">Technexus Review Lab</div>
-                  </blockquote>
-                </>
+              {effectiveTab === 'description' && (
+                <p className="max-w-4xl text-[18px] leading-[1.8] text-[#5d95bc] whitespace-pre-wrap">
+                  {longDescription ?? productDescription}
+                </p>
               )}
 
-              {selectedTab === 'specs' && (
+              {effectiveTab === 'specs' && (
                 <>
                   <h2 className="text-4xl font-black tracking-[-0.06em] text-[#1f6dad] md:text-[58px]">Technical Specifications</h2>
                   <div className="mt-8 grid grid-cols-1 gap-y-4 sm:grid-cols-2">
@@ -3420,7 +3441,7 @@ function ProductDetailView({
                 </>
               )}
 
-              {selectedTab === 'reviews' && (
+              {effectiveTab === 'reviews' && (
                 <>
                   <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
                     <div>
@@ -3458,7 +3479,7 @@ function ProductDetailView({
             </div>
 
             <div className="space-y-5">
-              {selectedTab !== 'reviews' &&
+              {effectiveTab === 'description' && specifications.length > 0 &&
                 specifications.map(([label, value]) => (
                   <div key={label} className="flex items-center justify-between gap-6 border-b border-[#b9d4e7] py-3">
                     <span className="text-sm font-black uppercase tracking-[0.08em] text-[#5d95bc]">{label}</span>
@@ -4190,21 +4211,11 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const PRODUCTS_PER_PAGE = 9;
 
-  const maxProductPrice = Math.max(...products.map(p => p.price), 0);
-  const availableBrands = Array.from(new Set(products.map(p => p.brand).filter(Boolean)));
-
-  const [pendingBrands, setPendingBrands] = useState<Set<string>>(new Set());
-  const [pendingMaxPrice, setPendingMaxPrice] = useState<number>(Infinity);
-  const [activeBrands, setActiveBrands] = useState<Set<string>>(new Set());
-  const [activeMaxPrice, setActiveMaxPrice] = useState<number>(Infinity);
-
   const filteredProducts = products.filter(prod => {
     const matchesCategory = !activeCategory || prod.category === activeCategory;
     const matchesSearch = prod.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          prod.series.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesBrand = activeBrands.size === 0 || activeBrands.has(prod.brand);
-    const matchesPrice = activeMaxPrice === Infinity || prod.price <= activeMaxPrice;
-    return matchesCategory && matchesSearch && matchesBrand && matchesPrice;
+    return matchesCategory && matchesSearch;
   }).sort((a, b) => {
     if (sortBy === 'Price: Low to High') return a.price - b.price;
     if (sortBy === 'Price: High to Low') return b.price - a.price;
@@ -4215,10 +4226,10 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
   const safePage = Math.min(currentPage, totalPages);
   const pagedProducts = filteredProducts.slice((safePage - 1) * PRODUCTS_PER_PAGE, safePage * PRODUCTS_PER_PAGE);
 
-  const displayCategory = activeCategory || (categories[0]?.name?.toUpperCase() ?? 'PRODUCTS');
+  const displayCategory = activeCategory || 'All Products';
   const categoryDescription = activeCategory
     ? `Browse our selection of next-generation ${activeCategory.toLowerCase()}, engineered for extreme performance.`
-    : 'Browse our selection of next-generation components, engineered for extreme performance.';
+    : 'Browse our full catalog of next-generation hardware, engineered for extreme performance.';
 
   return (
     <motion.div
@@ -4288,56 +4299,6 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
             </nav>
           </div>
 
-          <div className="mb-10">
-            <div className="mb-4 text-[11px] font-black uppercase tracking-[0.04em] text-[#5d89a7]">Price Range</div>
-            <div className="pr-2">
-              <input
-                type="range"
-                min={0}
-                max={maxProductPrice || 2500}
-                step={10}
-                value={pendingMaxPrice === Infinity ? (maxProductPrice || 2500) : pendingMaxPrice}
-                onChange={(e) => setPendingMaxPrice(Number(e.target.value))}
-                className="w-full accent-[#0d4d8a]"
-              />
-              <div className="mt-2 flex justify-between text-xs font-bold text-[#6d8397]">
-                <span>$0</span>
-                <span>{pendingMaxPrice === Infinity ? formatCurrency(maxProductPrice || 2500) : formatCurrency(pendingMaxPrice)}</span>
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-4 text-[11px] font-black uppercase tracking-[0.04em] text-[#5d89a7]">Brands</div>
-            <div className="space-y-4">
-              {availableBrands.map((brand) => (
-                <label key={brand} className="flex cursor-pointer items-center gap-3 text-sm text-[#537089]">
-                  <span
-                    className={`inline-flex h-5 w-5 items-center justify-center rounded-[4px] border bg-white shadow-inner transition-colors ${pendingBrands.has(brand) ? 'border-[#0d4d8a] bg-[#0d4d8a]' : 'border-[#9fc3db]'}`}
-                    onClick={() => setPendingBrands(prev => {
-                      const next = new Set(prev);
-                      if (next.has(brand)) next.delete(brand); else next.add(brand);
-                      return next;
-                    })}
-                  >
-                    {pendingBrands.has(brand) && <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                  </span>
-                  {brand}
-                </label>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setActiveBrands(pendingBrands);
-                setActiveMaxPrice(pendingMaxPrice);
-                setIsSidebarOpen(false);
-              }}
-              className="mt-8 w-full rounded-[12px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1a6fb0_100%)] px-5 py-4 text-sm font-black uppercase tracking-[0.08em] text-white shadow-[0_16px_30px_rgba(13,77,138,0.24)]"
-            >
-              Apply Filters
-            </button>
-          </div>
         </aside>
 
         {isSidebarOpen ? (
