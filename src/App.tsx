@@ -1912,9 +1912,23 @@ function ShippingView({
 
   const validateShippingForm = (): boolean => {
     const f = shippingForm;
-    const hasName = (f.firstName.trim() + f.lastName.trim()).length > 0;
-    if (!hasName || !f.email.trim() || !f.phone.trim() || !f.street.trim() || !f.city.trim() || !f.country.trim()) {
-      setFormError('Please fill in all required fields: name, email, phone, street, city, and country.');
+    const nameErr = validateName(f.firstName) ?? validateName(f.lastName);
+    if (nameErr) {
+      setFormError(nameErr);
+      return false;
+    }
+    const emailErr = validateEmail(f.email);
+    if (emailErr) {
+      setFormError(emailErr);
+      return false;
+    }
+    const phoneErr = validatePhone(f.phone, true);
+    if (phoneErr) {
+      setFormError(phoneErr);
+      return false;
+    }
+    if (!f.street.trim() || !f.city.trim() || !f.country.trim()) {
+      setFormError('Please fill in all required fields: street, city, and country.');
       return false;
     }
     setFormError(null);
@@ -3601,6 +3615,31 @@ function NotFoundView({ onGoHome }: { onGoHome: () => void; key?: string }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Shared validation helpers
+// ---------------------------------------------------------------------------
+const NAME_RE = /^[a-zA-ZÀ-ÿñÑ\s'\-]+$/;
+const PHONE_RE = /^[+\d][\d\s\-(). ]{5,18}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validateName(value: string): string | undefined {
+  if (!value.trim()) return 'This field is required.';
+  if (value.trim().length < 2) return 'Must be at least 2 characters.';
+  if (!NAME_RE.test(value.trim())) return 'Only letters, spaces, hyphens, and apostrophes are allowed.';
+}
+
+function validatePhone(value: string, required = false): string | undefined {
+  if (!value.trim()) return required ? 'Phone is required.' : undefined;
+  const digits = value.replace(/\D/g, '');
+  if (digits.length < 7) return 'Enter a valid phone number (at least 7 digits).';
+  if (!PHONE_RE.test(value.trim())) return 'Use digits, spaces, +, -, (, ) only.';
+}
+
+function validateEmail(value: string, required = true): string | undefined {
+  if (!value.trim()) return required ? 'Email is required.' : undefined;
+  if (!EMAIL_RE.test(value)) return 'Enter a valid email address.';
+}
+
 function AuthLoginView({
   onLogin,
   onGoHome,
@@ -3741,22 +3780,20 @@ function AuthSignupView({
     const errors: typeof fieldErrors = {};
     if (accountType === 'b2b') {
       if (!companyName.trim()) errors.companyName = 'Company name is required.';
+      else if (companyName.trim().length < 2) errors.companyName = 'Must be at least 2 characters.';
     } else {
-      if (!firstName.trim()) errors.firstName = 'First name is required.';
-      if (!lastName.trim()) errors.lastName = 'Last name is required.';
+      errors.firstName = validateName(firstName);
+      errors.lastName = validateName(lastName);
     }
-    if (!email.trim()) {
-      errors.email = 'Email is required.';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      errors.email = 'Enter a valid email address.';
-    }
+    errors.email = validateEmail(email);
     if (!password) {
       errors.password = 'Password is required.';
     } else if (password.length < 8) {
       errors.password = 'Password must be at least 8 characters.';
     }
-    setFieldErrors(errors);
-    return Object.keys(errors).length === 0;
+    const clean = Object.fromEntries(Object.entries(errors).filter(([, v]) => v != null));
+    setFieldErrors(clean);
+    return Object.keys(clean).length === 0;
   }
 
   return (
@@ -4506,9 +4543,13 @@ function Account({
   });
   const [isSavingPersonal, setIsSavingPersonal] = useState(false);
   const [personalError, setPersonalError] = useState<string | null>(null);
+  const [personalFieldErrors, setPersonalFieldErrors] = useState<{ firstName?: string; lastName?: string; phone?: string }>({});
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
   const [isSavingAddress, setIsSavingAddress] = useState(false);
   const [deliveryError, setDeliveryError] = useState<string | null>(null);
+  const [deliveryFieldErrors, setDeliveryFieldErrors] = useState<{
+    contactName?: string; email?: string; phone?: string; street?: string; city?: string; country?: string;
+  }>({});
   const [showDeliveryForm, setShowDeliveryForm] = useState(false);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [deliveryForm, setDeliveryForm] = useState({
@@ -4619,6 +4660,7 @@ function Account({
     setEditingContactId(null);
     setShowDeliveryForm(false);
     setDeliveryError(null);
+    setDeliveryFieldErrors({});
   };
 
   return (
@@ -4673,12 +4715,26 @@ function Account({
                 </div>
 
                 <form
+                  noValidate
                   onSubmit={async (event) => {
                     event.preventDefault();
                     if (!authSession) {
                       setPersonalError('Your session expired. Please sign in again.');
                       return;
                     }
+
+                    const pErrors: typeof personalFieldErrors = {};
+                    if (isCompanyAccount) {
+                      if (!personalForm.firstName.trim()) pErrors.firstName = 'Company name is required.';
+                      else if (personalForm.firstName.trim().length < 2) pErrors.firstName = 'Must be at least 2 characters.';
+                    } else {
+                      pErrors.firstName = validateName(personalForm.firstName);
+                      pErrors.lastName = validateName(personalForm.lastName);
+                    }
+                    pErrors.phone = validatePhone(personalForm.phone);
+                    const cleanPErrors = Object.fromEntries(Object.entries(pErrors).filter(([, v]) => v != null)) as typeof personalFieldErrors;
+                    setPersonalFieldErrors(cleanPErrors);
+                    if (Object.keys(cleanPErrors).length > 0) return;
 
                     setIsSavingPersonal(true);
                     setPersonalError(null);
@@ -4706,55 +4762,64 @@ function Account({
                   className="grid grid-cols-1 md:grid-cols-2 gap-5"
                 >
                   {isCompanyAccount ? (
-                    <label className="block md:col-span-2">
-                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Company Name</span>
-                      <input
-                        required
-                        type="text"
-                        value={personalForm.firstName}
-                        onChange={(event) => setPersonalForm((prev) => ({ ...prev, firstName: event.target.value }))}
-                        placeholder="Enter your company name"
-                        className="w-full rounded-xl bg-[#f7f1e8] border border-[#d5e0ec] px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:border-[#1a3f6f]/40 focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all"
-                      />
-                    </label>
-                  ) : (
-                    <>
-                      <label className="block">
-                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">First Name</span>
+                    <div className="block md:col-span-2">
+                      <label>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Company Name</span>
                         <input
-                          required
                           type="text"
                           value={personalForm.firstName}
-                          onChange={(event) => setPersonalForm((prev) => ({ ...prev, firstName: event.target.value }))}
-                          placeholder="Enter your first name"
-                          className="w-full rounded-xl bg-[#f7f1e8] border border-[#d5e0ec] px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:border-[#1a3f6f]/40 focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all"
+                          onChange={(event) => { setPersonalForm((prev) => ({ ...prev, firstName: event.target.value })); setPersonalFieldErrors((prev) => ({ ...prev, firstName: undefined })); }}
+                          placeholder="Enter your company name"
+                          className={`w-full rounded-xl bg-[#f7f1e8] border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${personalFieldErrors.firstName ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
                         />
                       </label>
+                      {personalFieldErrors.firstName && <p className="mt-1.5 text-xs text-red-500">{personalFieldErrors.firstName}</p>}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="block">
+                        <label>
+                          <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">First Name</span>
+                          <input
+                            type="text"
+                            value={personalForm.firstName}
+                            onChange={(event) => { setPersonalForm((prev) => ({ ...prev, firstName: event.target.value })); setPersonalFieldErrors((prev) => ({ ...prev, firstName: undefined })); }}
+                            placeholder="Enter your first name"
+                            className={`w-full rounded-xl bg-[#f7f1e8] border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${personalFieldErrors.firstName ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                          />
+                        </label>
+                        {personalFieldErrors.firstName && <p className="mt-1.5 text-xs text-red-500">{personalFieldErrors.firstName}</p>}
+                      </div>
 
-                      <label className="block">
-                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Last Name</span>
-                        <input
-                          required
-                          type="text"
-                          value={personalForm.lastName}
-                          onChange={(event) => setPersonalForm((prev) => ({ ...prev, lastName: event.target.value }))}
-                          placeholder="Enter your last name"
-                          className="w-full rounded-xl bg-[#f7f1e8] border border-[#d5e0ec] px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:border-[#1a3f6f]/40 focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all"
-                        />
-                      </label>
+                      <div className="block">
+                        <label>
+                          <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Last Name</span>
+                          <input
+                            type="text"
+                            value={personalForm.lastName}
+                            onChange={(event) => { setPersonalForm((prev) => ({ ...prev, lastName: event.target.value })); setPersonalFieldErrors((prev) => ({ ...prev, lastName: undefined })); }}
+                            placeholder="Enter your last name"
+                            className={`w-full rounded-xl bg-[#f7f1e8] border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${personalFieldErrors.lastName ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                          />
+                        </label>
+                        {personalFieldErrors.lastName && <p className="mt-1.5 text-xs text-red-500">{personalFieldErrors.lastName}</p>}
+                      </div>
                     </>
                   )}
 
-                  <label className="block">
-                    <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Phone</span>
-                    <input
-                      type="tel"
-                      value={personalForm.phone}
-                      onChange={(event) => setPersonalForm((prev) => ({ ...prev, phone: event.target.value }))}
-                      placeholder="Enter your phone number"
-                      className="w-full rounded-xl bg-[#f7f1e8] border border-[#d5e0ec] px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:border-[#1a3f6f]/40 focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all"
-                    />
-                  </label>
+                  <div className="block">
+                    <label>
+                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Phone</span>
+                      <input
+                        type="tel"
+                        value={personalForm.phone}
+                        onChange={(event) => { setPersonalForm((prev) => ({ ...prev, phone: event.target.value })); setPersonalFieldErrors((prev) => ({ ...prev, phone: undefined })); }}
+                        placeholder="Enter your phone number"
+                        className={`w-full rounded-xl bg-[#f7f1e8] border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${personalFieldErrors.phone ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                      />
+                    </label>
+                    {personalFieldErrors.phone && <p className="mt-1.5 text-xs text-red-500">{personalFieldErrors.phone}</p>}
+                  </div>
 
                   <label className="block">
                     <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Email Address</span>
@@ -4850,12 +4915,24 @@ function Account({
 
                 {showDeliveryForm && (
                   <form
+                    noValidate
                     onSubmit={async (event) => {
                       event.preventDefault();
                       if (!authSession) {
                         setDeliveryError('Your session expired. Please sign in again.');
                         return;
                       }
+
+                      const dErrors: typeof deliveryFieldErrors = {};
+                      dErrors.contactName = validateName(deliveryForm.contactName);
+                      dErrors.email = validateEmail(deliveryForm.email);
+                      dErrors.phone = validatePhone(deliveryForm.phone, true);
+                      if (!deliveryForm.street.trim()) dErrors.street = 'Street is required.';
+                      if (!deliveryForm.city.trim()) dErrors.city = 'City is required.';
+                      if (!deliveryForm.country.trim()) dErrors.country = 'Country is required.';
+                      const cleanDErrors = Object.fromEntries(Object.entries(dErrors).filter(([, v]) => v != null)) as typeof deliveryFieldErrors;
+                      setDeliveryFieldErrors(cleanDErrors);
+                      if (Object.keys(cleanDErrors).length > 0) return;
 
                       setIsSavingAddress(true);
                       setDeliveryError(null);
@@ -4914,67 +4991,77 @@ function Account({
                       />
                     </label>
 
-                    <label className={`${isCompanyAccount ? 'block md:col-span-2' : 'block'}`}>
-                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">
-                        {isCompanyAccount ? 'Contact Person or Team' : 'Recipient Name'}
-                      </span>
-                      <input
-                        required
-                        type="text"
-                        value={deliveryForm.contactName}
-                        onChange={(event) => setDeliveryForm((prev) => ({ ...prev, contactName: event.target.value }))}
-                        placeholder={isCompanyAccount ? 'Procurement team or business contact' : 'Who will receive this order?'}
-                        className="w-full rounded-xl bg-white border border-[#d5e0ec] px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:border-[#1a3f6f]/40 focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all"
-                      />
-                    </label>
+                    <div className={isCompanyAccount ? 'block md:col-span-2' : 'block'}>
+                      <label>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">
+                          {isCompanyAccount ? 'Contact Person or Team' : 'Recipient Name'}
+                        </span>
+                        <input
+                          type="text"
+                          value={deliveryForm.contactName}
+                          onChange={(event) => { setDeliveryForm((prev) => ({ ...prev, contactName: event.target.value })); setDeliveryFieldErrors((prev) => ({ ...prev, contactName: undefined })); }}
+                          placeholder={isCompanyAccount ? 'Procurement team or business contact' : 'Who will receive this order?'}
+                          className={`w-full rounded-xl bg-white border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${deliveryFieldErrors.contactName ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                        />
+                      </label>
+                      {deliveryFieldErrors.contactName && <p className="mt-1.5 text-xs text-red-500">{deliveryFieldErrors.contactName}</p>}
+                    </div>
 
-                    <label className="block">
-                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Email</span>
-                      <input
-                        required
-                        type="email"
-                        value={deliveryForm.email}
-                        onChange={(event) => setDeliveryForm((prev) => ({ ...prev, email: event.target.value }))}
-                        placeholder="contact@email.com"
-                        className="w-full rounded-xl bg-white border border-[#d5e0ec] px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:border-[#1a3f6f]/40 focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all"
-                      />
-                    </label>
+                    <div className="block">
+                      <label>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Email</span>
+                        <input
+                          type="email"
+                          value={deliveryForm.email}
+                          onChange={(event) => { setDeliveryForm((prev) => ({ ...prev, email: event.target.value })); setDeliveryFieldErrors((prev) => ({ ...prev, email: undefined })); }}
+                          placeholder="contact@email.com"
+                          className={`w-full rounded-xl bg-white border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${deliveryFieldErrors.email ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                        />
+                      </label>
+                      {deliveryFieldErrors.email && <p className="mt-1.5 text-xs text-red-500">{deliveryFieldErrors.email}</p>}
+                    </div>
 
-                    <label className="block">
-                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Phone</span>
-                      <input
-                        required
-                        type="tel"
-                        value={deliveryForm.phone}
-                        onChange={(event) => setDeliveryForm((prev) => ({ ...prev, phone: event.target.value }))}
-                        placeholder="Enter phone number"
-                        className="w-full rounded-xl bg-white border border-[#d5e0ec] px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:border-[#1a3f6f]/40 focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all"
-                      />
-                    </label>
+                    <div className="block">
+                      <label>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Phone</span>
+                        <input
+                          type="tel"
+                          value={deliveryForm.phone}
+                          onChange={(event) => { setDeliveryForm((prev) => ({ ...prev, phone: event.target.value })); setDeliveryFieldErrors((prev) => ({ ...prev, phone: undefined })); }}
+                          placeholder="Enter phone number"
+                          className={`w-full rounded-xl bg-white border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${deliveryFieldErrors.phone ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                        />
+                      </label>
+                      {deliveryFieldErrors.phone && <p className="mt-1.5 text-xs text-red-500">{deliveryFieldErrors.phone}</p>}
+                    </div>
 
-                    <label className="block">
-                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Street</span>
-                      <input
-                        required
-                        type="text"
-                        value={deliveryForm.street}
-                        onChange={(event) => setDeliveryForm((prev) => ({ ...prev, street: event.target.value }))}
-                        placeholder="Street and number"
-                        className="w-full rounded-xl bg-white border border-[#d5e0ec] px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:border-[#1a3f6f]/40 focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all"
-                      />
-                    </label>
+                    <div className="block">
+                      <label>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Street</span>
+                        <input
+                          type="text"
+                          value={deliveryForm.street}
+                          onChange={(event) => { setDeliveryForm((prev) => ({ ...prev, street: event.target.value })); setDeliveryFieldErrors((prev) => ({ ...prev, street: undefined })); }}
+                          placeholder="Street and number"
+                          className={`w-full rounded-xl bg-white border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${deliveryFieldErrors.street ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                        />
+                      </label>
+                      {deliveryFieldErrors.street && <p className="mt-1.5 text-xs text-red-500">{deliveryFieldErrors.street}</p>}
+                    </div>
 
-                    <label className="block">
-                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">City</span>
-                      <input
-                        required
-                        type="text"
-                        value={deliveryForm.city}
-                        onChange={(event) => setDeliveryForm((prev) => ({ ...prev, city: event.target.value }))}
-                        placeholder="City"
-                        className="w-full rounded-xl bg-white border border-[#d5e0ec] px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:border-[#1a3f6f]/40 focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all"
-                      />
-                    </label>
+                    <div className="block">
+                      <label>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">City</span>
+                        <input
+                          type="text"
+                          value={deliveryForm.city}
+                          onChange={(event) => { setDeliveryForm((prev) => ({ ...prev, city: event.target.value })); setDeliveryFieldErrors((prev) => ({ ...prev, city: undefined })); }}
+                          placeholder="City"
+                          className={`w-full rounded-xl bg-white border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${deliveryFieldErrors.city ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                        />
+                      </label>
+                      {deliveryFieldErrors.city && <p className="mt-1.5 text-xs text-red-500">{deliveryFieldErrors.city}</p>}
+                    </div>
 
                     <label className="block md:col-span-2">
                       <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">State / Region</span>
@@ -4998,17 +5085,19 @@ function Account({
                       />
                     </label>
 
-                    <label className="block">
-                      <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Country</span>
-                      <input
-                        required
-                        type="text"
-                        value={deliveryForm.country}
-                        onChange={(event) => setDeliveryForm((prev) => ({ ...prev, country: event.target.value }))}
-                        placeholder="Country"
-                        className="w-full rounded-xl bg-white border border-[#d5e0ec] px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:border-[#1a3f6f]/40 focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all"
-                      />
-                    </label>
+                    <div className="block">
+                      <label>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Country</span>
+                        <input
+                          type="text"
+                          value={deliveryForm.country}
+                          onChange={(event) => { setDeliveryForm((prev) => ({ ...prev, country: event.target.value })); setDeliveryFieldErrors((prev) => ({ ...prev, country: undefined })); }}
+                          placeholder="Country"
+                          className={`w-full rounded-xl bg-white border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${deliveryFieldErrors.country ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                        />
+                      </label>
+                      {deliveryFieldErrors.country && <p className="mt-1.5 text-xs text-red-500">{deliveryFieldErrors.country}</p>}
+                    </div>
 
                     <label className="block">
                       <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">
