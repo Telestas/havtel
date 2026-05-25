@@ -381,6 +381,7 @@ export type ApiCartItemVariant = {
   id: string;
   sku: string;
   name: string;
+  product: { name: string };
 };
 
 export type ApiCartItem = {
@@ -513,6 +514,7 @@ export type ReservationVariant = {
   id: string;
   sku: string;
   name: string;
+  product?: { name: string };
 };
 
 export type Reservation = {
@@ -525,6 +527,17 @@ export type Reservation = {
   subtotal: string;
   variant: ReservationVariant;
 };
+
+export async function createReservationRequest(
+  token: string,
+  payload: { variant_id: string; quantity: number },
+): Promise<Reservation> {
+  return apiRequest<Reservation>('/api/v1/reservations', {
+    method: 'POST',
+    token,
+    body: payload,
+  });
+}
 
 export async function saveCartItemRequest(token: string, variantId: string): Promise<Reservation> {
   return apiRequest<Reservation>(`/api/v1/reservations/from-cart/${variantId}`, {

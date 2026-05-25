@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { usePhoneInput, defaultCountries, parseCountry } from 'react-international-phone';
+import { isValidPhoneNumber } from 'libphonenumber-js';
 import { trackPageView } from './lib/analytics';
 import { setPageMeta, usePageMeta } from './hooks/usePageMeta';
 import { loadStripe } from '@stripe/stripe-js';
@@ -90,6 +92,7 @@ import {
   fetchMaintenanceStatus,
   listPickupPointsRequest,
   type PickupPointPublic,
+  createReservationRequest,
   saveCartItemRequest,
   listReservationsRequest,
   cancelReservationRequest,
@@ -97,7 +100,7 @@ import {
   type Reservation,
 } from './lib/api';
 
-type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot';
+type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot' | 'preorder';
 
 const PAGE_META: Partial<Record<View, { title: string; description: string }>> = {
   home:     { title: 'Havtel',    description: 'Premium tech hardware — servers, networking gear, and more.' },
@@ -343,6 +346,8 @@ const getRouteSnapshotFromPath = (pathname: string): RouteSnapshot => {
       return { view: 'orders', productSlug: null, trackedOrderId: null };
     case '/cart':
       return { view: 'cart', productSlug: null, trackedOrderId: null };
+    case '/preorder':
+      return { view: 'preorder', productSlug: null, trackedOrderId: null };
     case '/checkout/shipping':
       return { view: 'shipping', productSlug: null, trackedOrderId: null };
     case '/checkout/payment':
@@ -391,6 +396,8 @@ const buildPathFromRoute = ({
       return '/orders';
     case 'cart':
       return '/cart';
+    case 'preorder':
+      return '/preorder';
     case 'shipping':
       return '/checkout/shipping';
     case 'payment':
@@ -589,7 +596,7 @@ export default function App() {
       setCartItems(cart.items.map((si) => ({
         variantId: si.variant_id,
         productSlug: '',
-        productName: si.variant.name,
+        productName: si.variant.product?.name ?? si.variant.name,
         variantName: si.variant.name,
         quantity: si.quantity,
         price: parseFloat(si.unit_price),
@@ -689,7 +696,7 @@ export default function App() {
         const serverItems: CartItem[] = cart.items.map((si) => ({
           variantId: si.variant_id,
           productSlug: '',
-          productName: si.variant.name,
+          productName: si.variant.product?.name ?? si.variant.name,
           variantName: si.variant.name,
           quantity: si.quantity,
           price: parseFloat(si.unit_price),
@@ -1047,7 +1054,6 @@ export default function App() {
             { key: 'shop', label: 'SHOP', target: 'shop' as View, active: view === 'shop' || view === 'product' },
             { key: 'discover', label: 'DISCOVER', target: 'shop' as View, active: false },
             { key: 'support', label: 'SUPPORT', target: 'support' as View, active: view === 'support' },
-            { key: 'pre-order', label: 'PRE-ORDER', target: 'shop' as View, active: false },
           ].map((item) => (
             <button
               key={item.key}
@@ -1057,6 +1063,17 @@ export default function App() {
               {item.label}
             </button>
           ))}
+          <button
+            onClick={() => setView('preorder')}
+            className={`text-xs font-bold tracking-[0.12em] transition-colors pb-1 ${view === 'preorder' ? 'text-white border-b-2 border-white' : 'text-white/70 hover:text-white'} relative`}
+          >
+            PRE-ORDER
+            {reservations.reduce((sum, r) => sum + r.quantity, 0) > 0 && (
+              <span className="absolute -top-2 -right-3 bg-white text-[#1a3f6f] text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+                {reservations.reduce((sum, r) => sum + r.quantity, 0)}
+              </span>
+            )}
+          </button>
         </div>
         <div className="flex items-center gap-5">
           <button
@@ -1205,7 +1222,65 @@ export default function App() {
             onGoToLogin={() => setView('login')}
           />
         ) : view === 'shop' ? (
-          <Shop key="shop" products={products} categories={categories} isLoading={isLoadingProducts} onAddToCart={addToCart} onProductSelect={openProduct} />
+          <Shop key="shop" products={products} categories={categories} isLoading={isLoadingProducts} onAddToCart={addToCart} onProductSelect={openProduct} onSaveProduct={async (productSlug, quantity = 1) => {
+              if (!authSession?.access_token) { requireAuthForView('shop'); return; }
+              try {
+                const detail = await getProductRequest(productSlug, authSession.access_token);
+                const variant =
+                  detail.variants.find((v) => v.is_active && (v.inventory?.qty_available ?? 0) > 0) ??
+                  detail.variants.find((v) => v.is_active) ??
+                  detail.variants[0];
+                if (!variant) {
+                  setNotification('This product has no active variants.');
+                  setTimeout(() => setNotification(null), 3000);
+                  return;
+                }
+                const reservation = await createReservationRequest(authSession.access_token, {
+                  variant_id: variant.id,
+                  quantity,
+                });
+                setReservations((prev) => {
+                  const idx = prev.findIndex((r) => r.variant_id === reservation.variant_id);
+                  return idx >= 0 ? prev.map((r, i) => (i === idx ? reservation : r)) : [...prev, reservation];
+                });
+                setReservationToast({ expiresAt: reservation.expires_at });
+                setTimeout(() => setReservationToast(null), 6000);
+                setNotification('Product saved to Pre-Order');
+                setTimeout(() => setNotification(null), 3000);
+              } catch (err) {
+                setNotification(err instanceof ApiError ? err.message : 'Could not save product');
+                setTimeout(() => setNotification(null), 3000);
+              }
+            }} />
+        ) : view === 'preorder' ? (
+          <PreorderView
+            key="preorder"
+            reservations={reservations}
+            onCancelReservation={async (reservationId) => {
+              if (!authSession?.access_token) return;
+              await cancelReservationRequest(authSession.access_token, reservationId).catch(() => {});
+              setReservations((prev) => prev.filter((r) => r.id !== reservationId));
+            }}
+            onRestoreToCart={async (reservationId) => {
+              if (!authSession?.access_token) return;
+              try {
+                await restoreReservationRequest(authSession.access_token, reservationId);
+                setReservations((prev) => prev.filter((r) => r.id !== reservationId));
+                const cart = await getCartRequest(authSession.access_token);
+                setCartItems(cart.items.map((si) => ({
+                  variantId: si.variant_id,
+                  productSlug: '',
+                  productName: si.variant.product?.name ?? si.variant.name,
+                  variantName: si.variant.name,
+                  quantity: si.quantity,
+                  price: parseFloat(si.unit_price),
+                  img: null,
+                  maxStock: si.qty_available,
+                })));
+              } catch { /* ignore */ }
+            }}
+            onGoToShop={() => setView('shop')}
+          />
         ) : view === 'product' ? (
           <ProductDetailView
             key={`product-${selectedProductSlug ?? ''}`}
@@ -1351,13 +1426,15 @@ export default function App() {
                 await removeCartItemRequest(authSession.access_token, variantId).catch(() => {});
               }
             }}
-            reservations={reservations}
             onSaveItem={async (variantId) => {
               if (!authSession?.access_token) return;
               try {
                 const reservation = await saveCartItemRequest(authSession.access_token, variantId);
                 setCartItems((prev) => prev.filter((i) => i.variantId !== variantId));
-                setReservations((prev) => [...prev, reservation]);
+                setReservations((prev) => {
+                  const idx = prev.findIndex((r) => r.variant_id === reservation.variant_id);
+                  return idx >= 0 ? prev.map((r, i) => (i === idx ? reservation : r)) : [...prev, reservation];
+                });
                 setReservationToast({ expiresAt: reservation.expires_at });
                 setTimeout(() => setReservationToast(null), 6000);
               } catch (err) {
@@ -1365,34 +1442,31 @@ export default function App() {
                 setTimeout(() => setNotification(null), 3000);
               }
             }}
-            onCancelReservation={async (reservationId) => {
+            reservationToast={reservationToast}
+            savedItems={reservations}
+            onCancelSaved={async (reservationId) => {
               if (!authSession?.access_token) return;
               await cancelReservationRequest(authSession.access_token, reservationId).catch(() => {});
               setReservations((prev) => prev.filter((r) => r.id !== reservationId));
             }}
-            onRestoreReservation={async (reservationId) => {
+            onRestoreToCart={async (reservationId) => {
               if (!authSession?.access_token) return;
               try {
                 await restoreReservationRequest(authSession.access_token, reservationId);
                 setReservations((prev) => prev.filter((r) => r.id !== reservationId));
-                // Refresh cart to pick up restored item
                 const cart = await getCartRequest(authSession.access_token);
                 setCartItems(cart.items.map((si) => ({
                   variantId: si.variant_id,
                   productSlug: '',
-                  productName: si.variant.name,
+                  productName: si.variant.product?.name ?? si.variant.name,
                   variantName: si.variant.name,
                   quantity: si.quantity,
                   price: parseFloat(si.unit_price),
                   img: null,
                   maxStock: si.qty_available,
                 })));
-              } catch (err) {
-                setNotification(err instanceof ApiError ? err.message : 'Could not restore item');
-                setTimeout(() => setNotification(null), 3000);
-              }
+              } catch { /* ignore */ }
             }}
-            reservationToast={reservationToast}
           />
         ) : view === 'orders' ? (
           <OrderHistory
@@ -1497,11 +1571,11 @@ function ShoppingBagView({
   onIncreaseQuantity,
   onSetQuantity,
   onRemoveItem,
-  reservations,
   onSaveItem,
-  onCancelReservation,
-  onRestoreReservation,
   reservationToast,
+  savedItems = [],
+  onCancelSaved,
+  onRestoreToCart,
 }: {
   cartItems: CartItem[];
   staleCartWarning?: boolean;
@@ -1512,11 +1586,11 @@ function ShoppingBagView({
   onIncreaseQuantity: (variantId: string) => void;
   onSetQuantity: (variantId: string, qty: number) => void;
   onRemoveItem: (variantId: string) => void;
-  reservations: Reservation[];
   onSaveItem: (variantId: string) => void;
-  onCancelReservation: (reservationId: string) => void;
-  onRestoreReservation: (reservationId: string) => void;
   reservationToast: { expiresAt: string } | null;
+  savedItems?: Reservation[];
+  onCancelSaved?: (id: string) => void;
+  onRestoreToCart?: (id: string) => void;
   key?: string;
 }) {
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -1707,24 +1781,18 @@ function ShoppingBagView({
               )}
             </div>
 
-            {reservations.length > 0 && (
-              <div className="mt-12">
-                <div className="mb-6 flex items-center gap-4">
-                  <Bookmark size={20} className="text-amber-500" />
-                  <h2 className="text-2xl font-black tracking-[-0.04em] text-[#1f6dad]">Saved for Later</h2>
-                  <span className="ml-auto text-[13px] font-bold text-[#5c95bd]">{reservations.length} item{reservations.length !== 1 ? 's' : ''}</span>
-                </div>
+            {savedItems.length > 0 && (
+              <div className="mt-10">
+                <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.14em] text-[#5c95bd]">Saved for Later</span>
                 <div className="space-y-4">
-                  {reservations.map((r) => {
+                  {savedItems.map((r) => {
                     const expiresAt = new Date(r.expires_at);
                     const expLabel = expiresAt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
                     return (
-                      <div
-                        key={r.id}
-                        className="flex flex-col gap-4 rounded-[18px] border border-amber-200 bg-amber-50/60 p-5 md:flex-row md:items-center"
-                      >
+                      <div key={r.id} className="flex flex-col gap-4 rounded-[18px] border border-amber-200 bg-amber-50/60 p-5 md:flex-row md:items-center">
                         <div className="flex-1">
-                          <p className="text-[17px] font-black tracking-[-0.03em] text-[#1f6dad]">{r.variant.name}</p>
+                          <p className="text-[17px] font-black tracking-[-0.03em] text-[#1f6dad]">{r.variant.product?.name ?? r.variant.name}</p>
+                          <p className="mt-0.5 text-[14px] italic text-[#5c95bd]">{r.variant.name}</p>
                           <p className="mt-1 text-[12px] font-mono text-[#5c95bd]">{r.variant.sku}</p>
                           <p className="mt-2 text-[12px] font-bold text-amber-700">
                             Reserved until {expLabel} · {r.quantity} unit{r.quantity !== 1 ? 's' : ''}
@@ -1734,19 +1802,19 @@ function ShoppingBagView({
                           <span className="text-[16px] font-black text-[#1f6dad]">{formatCurrency(parseFloat(r.subtotal))}</span>
                           <button
                             type="button"
-                            onClick={() => onRestoreReservation(r.id)}
+                            onClick={() => onRestoreToCart?.(r.id)}
                             className="inline-flex items-center gap-2 rounded-[12px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-4 py-2.5 text-[13px] font-black uppercase tracking-[0.05em] text-white shadow-md transition hover:brightness-110"
                           >
                             <ShoppingCart size={13} />
-                            Add to Cart
+                            Move to Cart
                           </button>
                           <button
                             type="button"
-                            onClick={() => onCancelReservation(r.id)}
+                            onClick={() => onCancelSaved?.(r.id)}
                             className="inline-flex items-center gap-2 text-[13px] font-black uppercase tracking-[0.05em] text-[#5c95bd] transition hover:text-red-500"
                           >
                             <Trash2 size={13} />
-                            Remove
+                            Cancel
                           </button>
                         </div>
                       </div>
@@ -1755,6 +1823,7 @@ function ShoppingBagView({
                 </div>
               </div>
             )}
+
           </section>
 
           <aside className="h-fit rounded-[22px] border-[5px] border-[#7eb7db] bg-[rgba(255,250,241,0.92)] p-8 shadow-[0_16px_34px_rgba(107,154,187,0.16)] xl:sticky xl:top-10">
@@ -1912,25 +1981,16 @@ function ShippingView({
 
   const validateShippingForm = (): boolean => {
     const f = shippingForm;
-    const nameErr = validateName(f.firstName) ?? validateName(f.lastName);
-    if (nameErr) {
-      setFormError(nameErr);
-      return false;
-    }
+    const firstNameErr = validateName(f.firstName);
+    if (firstNameErr) { setFormError(`First name: ${firstNameErr}`); return false; }
+    if (f.lastName.trim() && !NAME_RE.test(f.lastName.trim())) { setFormError('Last name: Only letters, spaces, hyphens, and apostrophes are allowed.'); return false; }
     const emailErr = validateEmail(f.email);
-    if (emailErr) {
-      setFormError(emailErr);
-      return false;
-    }
+    if (emailErr) { setFormError(`Email: ${emailErr}`); return false; }
     const phoneErr = validatePhone(f.phone, true);
-    if (phoneErr) {
-      setFormError(phoneErr);
-      return false;
-    }
-    if (!f.street.trim() || !f.city.trim() || !f.country.trim()) {
-      setFormError('Please fill in all required fields: street, city, and country.');
-      return false;
-    }
+    if (phoneErr) { setFormError(`Phone: ${phoneErr}`); return false; }
+    if (!f.street.trim()) { setFormError('Street address is required.'); return false; }
+    if (!f.city.trim()) { setFormError('City is required.'); return false; }
+    if (!f.country.trim()) { setFormError('Country is required.'); return false; }
     setFormError(null);
     return true;
   };
@@ -1952,11 +2012,11 @@ function ShippingView({
     city: '',
     state: '',
     postalCode: '',
-    country: '',
+    country: 'US',
   });
 
   const applyAddressToForm = (address: UserAddress) => {
-    const { firstName, lastName } = splitFullName(address.contact_name ?? '');
+    const { firstName, lastName } = splitFullName(address.contact_name ?? authSession?.user.full_name ?? '');
     setSelectedAddressId(address.id);
     setShippingForm({
       email: address.contact_email ?? authSession?.user.email ?? '',
@@ -2229,26 +2289,44 @@ function ShippingView({
                   <h2 className="text-[30px] font-black tracking-[-0.04em] text-[#1f6dad]">Contact Information</h2>
                 </div>
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                  <label className="block">
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Email Address</span>
-                    <input
-                      type="email"
-                      value={shippingForm.email}
-                      onChange={(event) => setShippingForm((prev) => ({ ...prev, email: event.target.value }))}
-                      placeholder="name@domain.tech"
-                      className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Phone Number</span>
-                    <input
-                      type="tel"
-                      value={shippingForm.phone}
-                      onChange={(event) => setShippingForm((prev) => ({ ...prev, phone: event.target.value }))}
-                      placeholder="+1 (555) 000-0000"
-                      className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                    />
-                  </label>
+                  {selectedAddressId ? (
+                    <>
+                      <div>
+                        <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Email Address</span>
+                        <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                          {shippingForm.email || '—'}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Phone Number</span>
+                        <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                          {shippingForm.phone || '—'}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <label className="block">
+                        <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Email Address</span>
+                        <input
+                          type="email"
+                          value={shippingForm.email}
+                          onChange={(event) => setShippingForm((prev) => ({ ...prev, email: event.target.value }))}
+                          placeholder="name@domain.tech"
+                          className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
+                        />
+                      </label>
+                      <div className="block">
+                        <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Phone Number <span className="text-red-400">*</span></span>
+                        <PhoneField
+                          value={shippingForm.phone}
+                          onChange={(phone) => setShippingForm((prev) => ({ ...prev, phone }))}
+                          variant="dark"
+                          placeholder="Phone number"
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -2257,67 +2335,114 @@ function ShippingView({
                   <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-lg bg-[linear-gradient(180deg,#7eb7db_0%,#9bc8e2_100%)] px-2 text-xs font-black text-white shadow-[0_8px_18px_rgba(107,154,187,0.16)]">4</span>
                   <h2 className="text-[30px] font-black tracking-[-0.04em] text-[#1f6dad]">Destination Details</h2>
                 </div>
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                  <label className="block">
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">First Name</span>
-                    <input
-                      value={shippingForm.firstName}
-                      onChange={(event) => setShippingForm((prev) => ({ ...prev, firstName: event.target.value }))}
-                      placeholder="Enter your first name"
-                      className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Last Name</span>
-                    <input
-                      value={shippingForm.lastName}
-                      onChange={(event) => setShippingForm((prev) => ({ ...prev, lastName: event.target.value }))}
-                      placeholder="Enter your last name"
-                      className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                    />
-                  </label>
-                  <label className="block md:col-span-2">
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Stree Address</span>
-                    <input
-                      value={shippingForm.street}
-                      onChange={(event) => setShippingForm((prev) => ({ ...prev, street: event.target.value }))}
-                      placeholder="123 Tech Boulevard"
-                      className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">City</span>
-                    <input
-                      value={shippingForm.city}
-                      onChange={(event) => setShippingForm((prev) => ({ ...prev, city: event.target.value }))}
-                      className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">State / Province</span>
-                    <input
-                      value={shippingForm.state}
-                      onChange={(event) => setShippingForm((prev) => ({ ...prev, state: event.target.value }))}
-                      className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Postal Code</span>
-                    <input
-                      value={shippingForm.postalCode}
-                      onChange={(event) => setShippingForm((prev) => ({ ...prev, postalCode: event.target.value }))}
-                      className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Country</span>
-                    <input
-                      value={shippingForm.country}
-                      onChange={(event) => setShippingForm((prev) => ({ ...prev, country: event.target.value }))}
-                      className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                    />
-                  </label>
-                </div>
+                {selectedAddressId ? (
+                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                    <div>
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">First Name</span>
+                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                        {shippingForm.firstName || '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Last Name</span>
+                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                        {shippingForm.lastName || '—'}
+                      </div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Street Address</span>
+                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                        {shippingForm.street || '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">City</span>
+                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                        {shippingForm.city || '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">State / Province</span>
+                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                        {shippingForm.state || '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Postal Code</span>
+                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                        {shippingForm.postalCode || '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Country</span>
+                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                        {(PARSED_COUNTRIES.find((p) => p.iso2 === shippingForm.country)?.name ?? shippingForm.country) || '—'}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">First Name</span>
+                      <input
+                        value={shippingForm.firstName}
+                        onChange={(event) => setShippingForm((prev) => ({ ...prev, firstName: event.target.value }))}
+                        placeholder="Enter your first name"
+                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Last Name</span>
+                      <input
+                        value={shippingForm.lastName}
+                        onChange={(event) => setShippingForm((prev) => ({ ...prev, lastName: event.target.value }))}
+                        placeholder="Enter your last name"
+                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
+                      />
+                    </label>
+                    <label className="block md:col-span-2">
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Street Address</span>
+                      <input
+                        value={shippingForm.street}
+                        onChange={(event) => setShippingForm((prev) => ({ ...prev, street: event.target.value }))}
+                        placeholder="123 Tech Boulevard"
+                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">City</span>
+                      <input
+                        value={shippingForm.city}
+                        onChange={(event) => setShippingForm((prev) => ({ ...prev, city: event.target.value }))}
+                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">State / Province</span>
+                      <input
+                        value={shippingForm.state}
+                        onChange={(event) => setShippingForm((prev) => ({ ...prev, state: event.target.value }))}
+                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Postal Code</span>
+                      <input
+                        value={shippingForm.postalCode}
+                        onChange={(event) => setShippingForm((prev) => ({ ...prev, postalCode: event.target.value }))}
+                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
+                      />
+                    </label>
+                    <div className="block">
+                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Country <span className="text-red-400">*</span></span>
+                      <CountrySelect
+                        value={shippingForm.country}
+                        onChange={(country) => setShippingForm((prev) => ({ ...prev, country }))}
+                        variant="dark"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -3619,7 +3744,6 @@ function NotFoundView({ onGoHome }: { onGoHome: () => void; key?: string }) {
 // Shared validation helpers
 // ---------------------------------------------------------------------------
 const NAME_RE = /^[a-zA-ZÀ-ÿñÑ\s'\-]+$/;
-const PHONE_RE = /^[+\d][\d\s\-(). ]{5,18}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function validateName(value: string): string | undefined {
@@ -3629,15 +3753,158 @@ function validateName(value: string): string | undefined {
 }
 
 function validatePhone(value: string, required = false): string | undefined {
-  if (!value.trim()) return required ? 'Phone is required.' : undefined;
   const digits = value.replace(/\D/g, '');
-  if (digits.length < 7) return 'Enter a valid phone number (at least 7 digits).';
-  if (!PHONE_RE.test(value.trim())) return 'Use digits, spaces, +, -, (, ) only.';
+  if (digits.length <= 1) return required ? 'Phone is required.' : undefined;
+  try {
+    if (!isValidPhoneNumber(value)) return 'Enter a valid phone number for the selected country.';
+  } catch {
+    return 'Enter a valid phone number.';
+  }
 }
 
 function validateEmail(value: string, required = true): string | undefined {
   if (!value.trim()) return required ? 'Email is required.' : undefined;
   if (!EMAIL_RE.test(value)) return 'Enter a valid email address.';
+}
+
+// ---------------------------------------------------------------------------
+// PhoneField — country selector + validated phone input
+// ---------------------------------------------------------------------------
+function flagEmoji(iso2: string): string {
+  return String.fromCodePoint(...[...iso2.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+}
+
+function PhoneField({
+  value,
+  onChange,
+  variant = 'light',
+  hasError = false,
+  placeholder = 'Phone number',
+}: {
+  value: string;
+  onChange: (phone: string) => void;
+  variant?: 'dark' | 'light' | 'cream';
+  hasError?: boolean;
+  placeholder?: string;
+}) {
+  const { inputValue, handlePhoneValueChange, inputRef, country, setCountry } = usePhoneInput({
+    defaultCountry: 'us',
+    value,
+    countries: defaultCountries,
+    onChange: ({ phone }) => onChange(phone),
+  });
+
+  const borderClass = hasError
+    ? 'border-red-400'
+    : variant === 'dark'
+    ? 'border-[#d6e4ec] focus-within:border-white/40'
+    : 'border-[#d5e0ec] focus-within:border-[#1a3f6f]/40';
+
+  const bgClass =
+    variant === 'dark'
+      ? 'bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)]'
+      : variant === 'cream'
+      ? 'bg-[#f7f1e8]'
+      : 'bg-white';
+
+  const textClass = variant === 'dark' ? 'text-white font-bold text-xl' : 'text-[#1a3f6f]';
+  const placeholderClass = variant === 'dark' ? 'placeholder:text-white/70' : 'placeholder:text-[#9aabbe]';
+  const dividerClass = variant === 'dark' ? 'bg-white/30' : 'bg-[#d5e0ec]';
+  const radiusClass = variant === 'dark' ? 'rounded-[14px]' : 'rounded-xl';
+  const paddingClass = variant === 'dark' ? 'px-4 py-5' : 'px-4 py-4';
+
+  return (
+    <div className={`flex overflow-hidden ${radiusClass} border ${borderClass} ${bgClass} transition-all shadow-[0_10px_24px_rgba(107,154,187,0.08)] focus-within:shadow-[0_0_0_3px_rgba(26,63,111,0.08)]`}>
+      <select
+        value={country.iso2}
+        onChange={(e) => setCountry(e.target.value)}
+        className={`shrink-0 cursor-pointer appearance-none bg-transparent ${paddingClass} ${textClass} outline-none`}
+        title="Select country code"
+      >
+        {defaultCountries.map((c) => {
+          const p = parseCountry(c);
+          return (
+            <option key={p.iso2} value={p.iso2}>
+              {flagEmoji(p.iso2)} {p.name}
+            </option>
+          );
+        })}
+      </select>
+      <div className={`my-3 w-px shrink-0 ${dividerClass}`} />
+      <input
+        ref={inputRef}
+        value={inputValue}
+        onChange={handlePhoneValueChange}
+        type="tel"
+        placeholder={placeholder}
+        className={`min-w-0 flex-1 bg-transparent ${paddingClass} ${textClass} ${placeholderClass} outline-none`}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CountrySelect — validated country picker reusing react-international-phone data
+// ---------------------------------------------------------------------------
+const PARSED_COUNTRIES = defaultCountries.map((c) => parseCountry(c));
+
+function resolveCountryIso2(value: string): string {
+  if (!value) return 'us';
+  const v = value.trim().toLowerCase();
+  const byIso2 = PARSED_COUNTRIES.find((p) => p.iso2 === v);
+  if (byIso2) return byIso2.iso2;
+  const byName = PARSED_COUNTRIES.find((p) => p.name.toLowerCase() === v);
+  return byName?.iso2 ?? 'us';
+}
+
+function CountrySelect({
+  value,
+  onChange,
+  variant = 'light',
+  hasError = false,
+}: {
+  value: string;
+  onChange: (countryName: string) => void;
+  variant?: 'dark' | 'light' | 'cream';
+  hasError?: boolean;
+}) {
+  const selectedIso2 = resolveCountryIso2(value);
+
+  const handleChange = (iso2: string) => {
+    const p = PARSED_COUNTRIES.find((c) => c.iso2 === iso2);
+    onChange(p?.name ?? iso2);
+  };
+
+  const borderClass = hasError
+    ? 'border-red-400'
+    : variant === 'dark'
+    ? 'border-[#d6e4ec] focus:border-white/40'
+    : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40';
+
+  const bgClass =
+    variant === 'dark'
+      ? 'bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)]'
+      : variant === 'cream'
+      ? 'bg-[#f7f1e8]'
+      : 'bg-white';
+
+  const textClass = variant === 'dark' ? 'text-white font-bold text-xl' : 'text-[#1a3f6f]';
+  const radiusClass = variant === 'dark' ? 'rounded-[14px]' : 'rounded-xl';
+  const paddingClass = variant === 'dark' ? 'px-6 py-5' : 'px-5 py-4';
+
+  return (
+    <select
+      value={selectedIso2}
+      onChange={(e) => handleChange(e.target.value)}
+      className={`w-full cursor-pointer appearance-none ${radiusClass} border ${borderClass} ${bgClass} ${paddingClass} ${textClass} shadow-[0_10px_24px_rgba(107,154,187,0.08)] outline-none transition-all focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)]`}
+    >
+      {PARSED_COUNTRIES.map((p) => (
+        <option key={p.iso2} value={p.iso2}>
+          {p.name} {flagEmoji(p.iso2)}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 function AuthLoginView({
@@ -4239,7 +4506,100 @@ const ICON_MAP: Record<string, LucideIcon> = {
   CircuitBoard,
 };
 
-function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }: { products: Product[]; categories: Category[]; isLoading: boolean; onAddToCart: (slug: string, variantId?: string, quantity?: number) => void; onProductSelect: (slug: string) => void; key?: string }) {
+function PreorderView({
+  reservations,
+  onCancelReservation,
+  onRestoreToCart,
+  onGoToShop,
+}: {
+  reservations: Reservation[];
+  onCancelReservation: (id: string) => void;
+  onRestoreToCart: (id: string) => void;
+  onGoToShop: () => void;
+  key?: string;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="min-h-screen bg-[linear-gradient(90deg,#ffffff_0%,#fbf7f4_72%,#fff6df_100%)] text-[#1a3f6f]"
+    >
+      <main className="mx-auto max-w-[1200px] px-8 py-28 md:px-16">
+        <div className="mb-10 flex items-end justify-between gap-6">
+          <div>
+            <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.14em] text-[#5c95bd]">Your Reservations</span>
+            <h1 className="text-5xl font-black uppercase tracking-[-0.08em] text-[#1f6dad] md:text-[84px] md:leading-[0.95]">Pre-Order</h1>
+          </div>
+          {reservations.length > 0 && (
+            <div className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">
+              {reservations.length} item{reservations.length !== 1 ? 's' : ''}
+            </div>
+          )}
+        </div>
+
+        {reservations.length === 0 ? (
+          <div className="rounded-[22px] border border-[#d6e4ec] bg-white p-12 text-center shadow-[0_16px_34px_rgba(107,154,187,0.12)]">
+            <Bookmark size={48} className="mx-auto mb-6 text-[#5c95bd]" />
+            <h2 className="mb-3 text-3xl font-black tracking-[-0.04em] text-[#1f6dad]">No pre-orders yet</h2>
+            <p className="mb-8 text-[#5d95bc]">Save products from the store to reserve them for later.</p>
+            <button
+              type="button"
+              onClick={onGoToShop}
+              className="inline-flex items-center gap-3 rounded-[14px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-8 py-5 text-lg font-black text-white shadow-[0_14px_30px_rgba(13,77,138,0.22)]"
+            >
+              Browse the Store
+              <ArrowRight size={20} />
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {reservations.map((r) => {
+              const expiresAt = new Date(r.expires_at);
+              const expLabel = expiresAt.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+              return (
+                <div
+                  key={r.id}
+                  className="flex flex-col gap-4 rounded-[18px] border border-amber-200 bg-amber-50/60 p-5 md:flex-row md:items-center"
+                >
+                  <div className="flex-1">
+                    <p className="text-[17px] font-black tracking-[-0.03em] text-[#1f6dad]">{r.variant.product?.name ?? r.variant.name}</p>
+                    <p className="mt-0.5 text-[14px] italic text-[#5c95bd]">{r.variant.name}</p>
+                    <p className="mt-1 text-[12px] font-mono text-[#5c95bd]">{r.variant.sku}</p>
+                    <p className="mt-2 text-[12px] font-bold text-amber-700">
+                      Reserved until {expLabel} · {r.quantity} unit{r.quantity !== 1 ? 's' : ''}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[16px] font-black text-[#1f6dad]">{formatCurrency(parseFloat(r.subtotal))}</span>
+                    <button
+                      type="button"
+                      onClick={() => onRestoreToCart(r.id)}
+                      className="inline-flex items-center gap-2 rounded-[12px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-4 py-2.5 text-[13px] font-black uppercase tracking-[0.05em] text-white shadow-md transition hover:brightness-110"
+                    >
+                      <ShoppingCart size={13} />
+                      Move to Cart
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onCancelReservation(r.id)}
+                      className="inline-flex items-center gap-2 text-[13px] font-black uppercase tracking-[0.05em] text-[#5c95bd] transition hover:text-red-500"
+                    >
+                      <Trash2 size={13} />
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+    </motion.div>
+  );
+}
+
+function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, onSaveProduct }: { products: Product[]; categories: Category[]; isLoading: boolean; onAddToCart: (slug: string, variantId?: string, quantity?: number) => void; onProductSelect: (slug: string) => void; onSaveProduct: (productSlug: string, quantity?: number) => Promise<void>; key?: string }) {
   const [activeCategory, setActiveCategory] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('Popularity');
@@ -4458,8 +4818,20 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect }:
                             setQuantities((q) => ({ ...q, [prod.slug]: 1 }));
                           }}
                           className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-[#1c6aa7] text-white shadow-[0_8px_16px_rgba(13,77,138,0.22)] transition-colors hover:bg-[#0d4d8a]"
+                          title="Add to cart"
                         >
                           <ShoppingCart size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void onSaveProduct(prod.slug, quantities[prod.slug] ?? 1);
+                          }}
+                          disabled={!prod.isInStock}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-[8px] bg-[#0d5c8a] text-white shadow-[0_8px_16px_rgba(13,77,138,0.22)] transition-colors hover:bg-[#094d77] disabled:opacity-40"
+                          title="Save for later"
+                        >
+                          <Bookmark size={14} />
                         </button>
                       </div>
                     </div>
@@ -4764,7 +5136,7 @@ function Account({
                   {isCompanyAccount ? (
                     <div className="block md:col-span-2">
                       <label>
-                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Company Name</span>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Company Name <span className="text-red-500">*</span></span>
                         <input
                           type="text"
                           value={personalForm.firstName}
@@ -4779,7 +5151,7 @@ function Account({
                     <>
                       <div className="block">
                         <label>
-                          <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">First Name</span>
+                          <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">First Name <span className="text-red-500">*</span></span>
                           <input
                             type="text"
                             value={personalForm.firstName}
@@ -4793,7 +5165,7 @@ function Account({
 
                       <div className="block">
                         <label>
-                          <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Last Name</span>
+                          <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Last Name <span className="text-red-500">*</span></span>
                           <input
                             type="text"
                             value={personalForm.lastName}
@@ -4810,12 +5182,12 @@ function Account({
                   <div className="block">
                     <label>
                       <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Phone</span>
-                      <input
-                        type="tel"
+                      <PhoneField
                         value={personalForm.phone}
-                        onChange={(event) => { setPersonalForm((prev) => ({ ...prev, phone: event.target.value })); setPersonalFieldErrors((prev) => ({ ...prev, phone: undefined })); }}
-                        placeholder="Enter your phone number"
-                        className={`w-full rounded-xl bg-[#f7f1e8] border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${personalFieldErrors.phone ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                        onChange={(phone) => { setPersonalForm((prev) => ({ ...prev, phone })); setPersonalFieldErrors((prev) => ({ ...prev, phone: undefined })); }}
+                        variant="cream"
+                        hasError={!!personalFieldErrors.phone}
+                        placeholder="Phone number"
                       />
                     </label>
                     {personalFieldErrors.phone && <p className="mt-1.5 text-xs text-red-500">{personalFieldErrors.phone}</p>}
@@ -4994,7 +5366,7 @@ function Account({
                     <div className={isCompanyAccount ? 'block md:col-span-2' : 'block'}>
                       <label>
                         <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">
-                          {isCompanyAccount ? 'Contact Person or Team' : 'Recipient Name'}
+                          {isCompanyAccount ? 'Contact Person or Team' : 'Recipient Name'} <span className="text-red-500">*</span>
                         </span>
                         <input
                           type="text"
@@ -5009,7 +5381,7 @@ function Account({
 
                     <div className="block">
                       <label>
-                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Email</span>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Email <span className="text-red-500">*</span></span>
                         <input
                           type="email"
                           value={deliveryForm.email}
@@ -5023,13 +5395,13 @@ function Account({
 
                     <div className="block">
                       <label>
-                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Phone</span>
-                        <input
-                          type="tel"
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Phone <span className="text-red-500">*</span></span>
+                        <PhoneField
                           value={deliveryForm.phone}
-                          onChange={(event) => { setDeliveryForm((prev) => ({ ...prev, phone: event.target.value })); setDeliveryFieldErrors((prev) => ({ ...prev, phone: undefined })); }}
-                          placeholder="Enter phone number"
-                          className={`w-full rounded-xl bg-white border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${deliveryFieldErrors.phone ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                          onChange={(phone) => { setDeliveryForm((prev) => ({ ...prev, phone })); setDeliveryFieldErrors((prev) => ({ ...prev, phone: undefined })); }}
+                          variant="light"
+                          hasError={!!deliveryFieldErrors.phone}
+                          placeholder="Phone number"
                         />
                       </label>
                       {deliveryFieldErrors.phone && <p className="mt-1.5 text-xs text-red-500">{deliveryFieldErrors.phone}</p>}
@@ -5037,7 +5409,7 @@ function Account({
 
                     <div className="block">
                       <label>
-                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Street</span>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Street <span className="text-red-500">*</span></span>
                         <input
                           type="text"
                           value={deliveryForm.street}
@@ -5051,7 +5423,7 @@ function Account({
 
                     <div className="block">
                       <label>
-                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">City</span>
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">City <span className="text-red-500">*</span></span>
                         <input
                           type="text"
                           value={deliveryForm.city}
@@ -5087,13 +5459,12 @@ function Account({
 
                     <div className="block">
                       <label>
-                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Country</span>
-                        <input
-                          type="text"
+                        <span className="text-[11px] uppercase tracking-[0.28em] text-[#6b7c8d] font-bold block mb-3">Country <span className="text-red-500">*</span></span>
+                        <CountrySelect
                           value={deliveryForm.country}
-                          onChange={(event) => { setDeliveryForm((prev) => ({ ...prev, country: event.target.value })); setDeliveryFieldErrors((prev) => ({ ...prev, country: undefined })); }}
-                          placeholder="Country"
-                          className={`w-full rounded-xl bg-white border px-5 py-4 text-[#1a3f6f] placeholder:text-[#9aabbe] focus:outline-none focus:shadow-[0_0_0_3px_rgba(26,63,111,0.08)] transition-all ${deliveryFieldErrors.country ? 'border-red-400 focus:border-red-400' : 'border-[#d5e0ec] focus:border-[#1a3f6f]/40'}`}
+                          onChange={(country) => { setDeliveryForm((prev) => ({ ...prev, country })); setDeliveryFieldErrors((prev) => ({ ...prev, country: undefined })); }}
+                          variant="light"
+                          hasError={!!deliveryFieldErrors.country}
                         />
                       </label>
                       {deliveryFieldErrors.country && <p className="mt-1.5 text-xs text-red-500">{deliveryFieldErrors.country}</p>}
