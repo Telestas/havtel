@@ -482,6 +482,7 @@ export default function App() {
   const [trackedOrderId, setTrackedOrderId] = useState<string | null>(initialRoute.trackedOrderId);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [reservationToast, setReservationToast] = useState<{ expiresAt: string } | null>(null);
+  const [postLoginView, setPostLoginView] = useState<View | null>(null);
   const isAuthenticated = authSession !== null;
   const isPopNavigationRef = useRef(false);
   const initialTokenRef = useRef(authSession?.access_token ?? null);
@@ -493,6 +494,7 @@ export default function App() {
 
   const addToCart = async (productSlug: string, preferredVariantId?: string, quantity = 1) => {
     if (!authSession?.access_token) {
+      setPostLoginView(view);
       setAuthError('Please sign in to add items to your cart.');
       setView('login');
       return;
@@ -806,6 +808,7 @@ export default function App() {
       return;
     }
 
+    setPostLoginView(nextView);
     setAuthError('Please sign in before continuing to checkout.');
     setView('login');
   };
@@ -924,7 +927,9 @@ export default function App() {
     try {
       const session = await loginRequest(payload);
       persistSession(session);
-      setView('account');
+      const destination = postLoginView ?? 'account';
+      setPostLoginView(null);
+      setView(destination);
     } catch (error) {
       setAuthError(error instanceof ApiError ? error.message : 'Unable to sign in right now.');
     } finally {
@@ -956,7 +961,9 @@ export default function App() {
         customer_type: payload.accountType,
       });
       persistSession(session);
-      setView('account');
+      const destination = postLoginView ?? 'account';
+      setPostLoginView(null);
+      setView(destination);
     } catch (error) {
       setAuthError(error instanceof ApiError ? error.message : 'Unable to create your account right now.');
     } finally {
@@ -1596,6 +1603,8 @@ function ShoppingBagView({
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const tax = subtotal * 0.08;
   const total = subtotal + tax;
+  const [promoCode, setPromoCode] = useState('');
+  const [promoError, setPromoError] = useState<string | null>(null);
 
   return (
     <motion.div
@@ -1886,13 +1895,22 @@ function ShoppingBagView({
               <div className="flex gap-3">
                 <input
                   type="text"
-                  defaultValue="HAVTEL2026"
+                  value={promoCode}
+                  onChange={(e) => { setPromoCode(e.target.value); setPromoError(null); }}
+                  placeholder="Enter code"
                   className="min-w-0 flex-1 rounded-[16px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#d7ebf5_0%,#cfe6f3_100%)] px-5 py-4 text-base font-bold text-white placeholder:text-white/80 focus:outline-none"
                 />
-                <button type="button" className="rounded-[16px] bg-[linear-gradient(90deg,#63a8d5_0%,#74b4db_100%)] px-6 py-4 text-lg font-black text-white shadow-[0_10px_24px_rgba(107,154,187,0.16)] transition-colors hover:opacity-95">
+                <button
+                  type="button"
+                  onClick={() => { if (promoCode.trim()) setPromoError('Invalid promotional code.'); }}
+                  className="rounded-[16px] bg-[linear-gradient(90deg,#63a8d5_0%,#74b4db_100%)] px-6 py-4 text-lg font-black text-white shadow-[0_10px_24px_rgba(107,154,187,0.16)] transition-colors hover:opacity-95"
+                >
                   Apply
                 </button>
               </div>
+              {promoError && (
+                <p className="mt-3 text-[13px] font-bold text-red-400">{promoError}</p>
+              )}
             </div>
 
             <button
@@ -2289,44 +2307,18 @@ function ShippingView({
                   <h2 className="text-[30px] font-black tracking-[-0.04em] text-[#1f6dad]">Contact Information</h2>
                 </div>
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                  {selectedAddressId ? (
-                    <>
-                      <div>
-                        <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Email Address</span>
-                        <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                          {shippingForm.email || '—'}
-                        </div>
-                      </div>
-                      <div>
-                        <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Phone Number</span>
-                        <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                          {shippingForm.phone || '—'}
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <label className="block">
-                        <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Email Address</span>
-                        <input
-                          type="email"
-                          value={shippingForm.email}
-                          onChange={(event) => setShippingForm((prev) => ({ ...prev, email: event.target.value }))}
-                          placeholder="name@domain.tech"
-                          className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                        />
-                      </label>
-                      <div className="block">
-                        <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Phone Number <span className="text-red-400">*</span></span>
-                        <PhoneField
-                          value={shippingForm.phone}
-                          onChange={(phone) => setShippingForm((prev) => ({ ...prev, phone }))}
-                          variant="dark"
-                          placeholder="Phone number"
-                        />
-                      </div>
-                    </>
-                  )}
+                  <div>
+                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Email Address</span>
+                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                      {shippingForm.email || '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Phone Number</span>
+                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                      {shippingForm.phone || '—'}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -2335,114 +2327,50 @@ function ShippingView({
                   <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-lg bg-[linear-gradient(180deg,#7eb7db_0%,#9bc8e2_100%)] px-2 text-xs font-black text-white shadow-[0_8px_18px_rgba(107,154,187,0.16)]">4</span>
                   <h2 className="text-[30px] font-black tracking-[-0.04em] text-[#1f6dad]">Destination Details</h2>
                 </div>
-                {selectedAddressId ? (
-                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                    <div>
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">First Name</span>
-                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                        {shippingForm.firstName || '—'}
-                      </div>
-                    </div>
-                    <div>
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Last Name</span>
-                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                        {shippingForm.lastName || '—'}
-                      </div>
-                    </div>
-                    <div className="md:col-span-2">
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Street Address</span>
-                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                        {shippingForm.street || '—'}
-                      </div>
-                    </div>
-                    <div>
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">City</span>
-                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                        {shippingForm.city || '—'}
-                      </div>
-                    </div>
-                    <div>
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">State / Province</span>
-                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                        {shippingForm.state || '—'}
-                      </div>
-                    </div>
-                    <div>
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Postal Code</span>
-                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                        {shippingForm.postalCode || '—'}
-                      </div>
-                    </div>
-                    <div>
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Country</span>
-                      <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                        {(PARSED_COUNTRIES.find((p) => p.iso2 === shippingForm.country)?.name ?? shippingForm.country) || '—'}
-                      </div>
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                  <div>
+                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">First Name</span>
+                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                      {shippingForm.firstName || '—'}
                     </div>
                   </div>
-                ) : (
-                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                    <label className="block">
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">First Name</span>
-                      <input
-                        value={shippingForm.firstName}
-                        onChange={(event) => setShippingForm((prev) => ({ ...prev, firstName: event.target.value }))}
-                        placeholder="Enter your first name"
-                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Last Name</span>
-                      <input
-                        value={shippingForm.lastName}
-                        onChange={(event) => setShippingForm((prev) => ({ ...prev, lastName: event.target.value }))}
-                        placeholder="Enter your last name"
-                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                      />
-                    </label>
-                    <label className="block md:col-span-2">
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Street Address</span>
-                      <input
-                        value={shippingForm.street}
-                        onChange={(event) => setShippingForm((prev) => ({ ...prev, street: event.target.value }))}
-                        placeholder="123 Tech Boulevard"
-                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white placeholder:text-white/90 shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">City</span>
-                      <input
-                        value={shippingForm.city}
-                        onChange={(event) => setShippingForm((prev) => ({ ...prev, city: event.target.value }))}
-                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">State / Province</span>
-                      <input
-                        value={shippingForm.state}
-                        onChange={(event) => setShippingForm((prev) => ({ ...prev, state: event.target.value }))}
-                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Postal Code</span>
-                      <input
-                        value={shippingForm.postalCode}
-                        onChange={(event) => setShippingForm((prev) => ({ ...prev, postalCode: event.target.value }))}
-                        className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)] focus:outline-none"
-                      />
-                    </label>
-                    <div className="block">
-                      <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Country <span className="text-red-400">*</span></span>
-                      <CountrySelect
-                        value={shippingForm.country}
-                        onChange={(country) => setShippingForm((prev) => ({ ...prev, country }))}
-                        variant="dark"
-                      />
+                  <div>
+                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Last Name</span>
+                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                      {shippingForm.lastName || '—'}
                     </div>
                   </div>
-                )}
+                  <div className="md:col-span-2">
+                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Street Address</span>
+                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                      {shippingForm.street || '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">City</span>
+                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                      {shippingForm.city || '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">State / Province</span>
+                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                      {shippingForm.state || '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Postal Code</span>
+                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                      {shippingForm.postalCode || '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Country</span>
+                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
+                      {(PARSED_COUNTRIES.find((p) => p.iso2 === shippingForm.country)?.name ?? shippingForm.country) || '—'}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div>
