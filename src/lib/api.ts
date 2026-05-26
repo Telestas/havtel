@@ -469,6 +469,7 @@ export type CheckoutPayload = {
   shipping_method: string;
   shipping_amount: number;
   tax_amount: number;
+  return_url?: string;
 };
 
 export type CheckoutResponse = {

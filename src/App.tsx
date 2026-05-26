@@ -4,7 +4,7 @@ import { isValidPhoneNumber } from 'libphonenumber-js';
 import { trackPageView } from './lib/analytics';
 import { setPageMeta, usePageMeta } from './hooks/usePageMeta';
 import { loadStripe } from '@stripe/stripe-js';
-import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
+import { CheckoutElementsProvider, PaymentElement, useCheckout } from '@stripe/react-stripe-js/checkout';
 
 const stripePromise = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY
   ? loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string)
@@ -124,6 +124,7 @@ interface Product {
   tag: string | null;
   img: string | null;
   category: string;
+  categoryId: string;
   categorySlug: string;
   brand: string;
   variants: ProductVariant[];
@@ -438,6 +439,7 @@ function mapApiProductToLocal(
     tag: null,
     img: p.primary_image_url,
     category: cat?.name?.toUpperCase() ?? 'OTHER',
+    categoryId: p.category_id ?? '',
     categorySlug: cat?.slug ?? '',
     brand: cat?.name ?? '',
     variants: [],
@@ -670,24 +672,49 @@ export default function App() {
     trackPageView(nextPath, document.title);
   }, [view, selectedProductSlug, trackedOrderId]);
 
-  // Load products and categories from API
+  // Load products and categories from API (all pages)
   useEffect(() => {
+    const PAGE_LIMIT = 100;
+    let cancelled = false;
     setIsLoadingProducts(true);
-    Promise.all([listCategoriesRequest(), listProductsRequest({}, authSession?.access_token)])
-      .then(([cats, paginated]) => {
-        setCategories(cats);
-        const flat = new Map<string, Category>();
-        const flattenCats = (list: Category[]) => {
-          for (const c of list) {
-            flat.set(c.id, c);
-            if (c.children.length) flattenCats(c.children);
-          }
-        };
-        flattenCats(cats);
-        setProducts(paginated.items.map((p) => mapApiProductToLocal(p, flat)));
-      })
+
+    const fetchAllProducts = async () => {
+      const [cats, firstPage] = await Promise.all([
+        listCategoriesRequest(),
+        listProductsRequest({ limit: PAGE_LIMIT, page: 1 }, authSession?.access_token),
+      ]);
+      if (cancelled) return;
+
+      const flat = new Map<string, Category>();
+      const flattenCats = (list: Category[]) => {
+        for (const c of list) {
+          flat.set(c.id, c);
+          if (c.children.length) flattenCats(c.children);
+        }
+      };
+      flattenCats(cats);
+      setCategories(cats);
+
+      let allItems = [...firstPage.items];
+
+      if (firstPage.pages > 1) {
+        const remaining = await Promise.all(
+          Array.from({ length: firstPage.pages - 1 }, (_, i) =>
+            listProductsRequest({ limit: PAGE_LIMIT, page: i + 2 }, authSession?.access_token),
+          ),
+        );
+        if (cancelled) return;
+        for (const page of remaining) allItems = allItems.concat(page.items);
+      }
+
+      setProducts(allItems.map((p) => mapApiProductToLocal(p, flat)));
+    };
+
+    fetchAllProducts()
       .catch(() => {/* products stay empty */})
-      .finally(() => setIsLoadingProducts(false));
+      .finally(() => { if (!cancelled) setIsLoadingProducts(false); });
+
+    return () => { cancelled = true; };
   }, [authSession?.access_token]);
 
   // Sync cart from server on login / page refresh
@@ -993,6 +1020,7 @@ export default function App() {
           shipping_method: isWarehousePickup ? 'warehouse_pickup' : shippingMethod,
           shipping_amount: shippingAmount,
           tax_amount: taxAmount,
+          return_url: `${window.location.origin}/checkout/confirmed`,
           ...(isWarehousePickup
             ? { pickup_point_id: selectedPickupPointId ?? undefined }
             : address
@@ -1293,6 +1321,7 @@ export default function App() {
             key={`product-${selectedProductSlug ?? ''}`}
             productSlug={selectedProductSlug ?? ''}
             authToken={authSession?.access_token}
+            customerType={authSession?.user?.customer_type ?? null}
             allProducts={products}
             onAddToCart={addToCart}
             onBackToShop={() => setView('shop')}
@@ -1300,10 +1329,10 @@ export default function App() {
           />
         ) : view === 'payment' ? (
           checkoutResponse ? (
-            <Elements
+            <CheckoutElementsProvider
               key="payment"
               stripe={stripePromise}
-              options={{ clientSecret: checkoutResponse.client_secret, appearance: { theme: 'stripe' } }}
+              options={{ clientSecret: checkoutResponse.client_secret }}
             >
               <PaymentView
                 cartItems={cartItems}
@@ -1319,7 +1348,7 @@ export default function App() {
                 onBackToCart={() => requireAuthForView('cart')}
                 onPaymentSuccess={handlePaymentSuccess}
               />
-            </Elements>
+            </CheckoutElementsProvider>
           ) : null
         ) : view === 'tracking' ? (
           <TrackOrderView
@@ -2530,28 +2559,21 @@ function ShippingView({
 
 
 function StripePaymentForm({ total, onPaymentSuccess }: { total: number; onPaymentSuccess: () => Promise<void> }) {
-  const stripe = useStripe();
-  const elements = useElements();
+  const checkoutState = useCheckout();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [stripeError, setStripeError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!stripe || !elements) return;
+    if (checkoutState.type !== 'success') return;
 
     setIsSubmitting(true);
     setStripeError(null);
 
-    const { error } = await stripe.confirmPayment({
-      elements,
-      confirmParams: {
-        return_url: `${window.location.origin}/checkout/confirmed`,
-      },
-      redirect: 'if_required',
-    });
+    const result = await checkoutState.checkout.confirm();
 
-    if (error) {
-      setStripeError(error.message ?? 'Payment failed. Please try again.');
+    if (result.type === 'error') {
+      setStripeError(result.error.message ?? 'Payment failed. Please try again.');
       setIsSubmitting(false);
       return;
     }
@@ -2559,6 +2581,14 @@ function StripePaymentForm({ total, onPaymentSuccess }: { total: number; onPayme
     await onPaymentSuccess();
     setIsSubmitting(false);
   };
+
+  if (checkoutState.type === 'loading') {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#1f6dad] border-t-transparent" />
+      </div>
+    );
+  }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -2575,7 +2605,7 @@ function StripePaymentForm({ total, onPaymentSuccess }: { total: number; onPayme
 
       <button
         type="submit"
-        disabled={!stripe || isSubmitting}
+        disabled={checkoutState.type !== 'success' || isSubmitting}
         className="w-full rounded-[16px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-8 py-5 text-[20px] font-black uppercase tracking-[0.06em] text-white shadow-[0_16px_30px_rgba(13,77,138,0.24)] transition-all hover:scale-[1.01] disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
       >
         {isSubmitting ? 'Processing…' : `Pay ${formatCurrency(total)}`}
@@ -3196,6 +3226,7 @@ function TrackOrderView({
 function ProductDetailView({
   productSlug,
   authToken,
+  customerType,
   allProducts,
   onAddToCart,
   onBackToShop,
@@ -3203,6 +3234,7 @@ function ProductDetailView({
 }: {
   productSlug: string;
   authToken?: string;
+  customerType: 'b2c' | 'b2b' | null;
   allProducts: Product[];
   onAddToCart: (slug: string, variantId?: string) => void;
   onBackToShop: () => void;
@@ -3258,9 +3290,11 @@ function ProductDetailView({
   const productName = apiProduct?.name ?? 'Product';
   const inStock = (selectedVariant?.inventory?.qty_available ?? 0) > 0;
   const selectedVariantLabel = selectedVariant?.name ?? 'Standard Configuration';
-  const productDescription =
-    apiProduct?.description ??
-    `Engineered for the next generation of computational dominance. The ${productName} leverages Havtel's proprietary photonic-bridge architecture to deliver unprecedented throughput.`;
+  const productDescription = apiProduct?.description ?? null;
+  const localProduct = allProducts.find((p) => p.slug === productSlug);
+  const categoryLabel = localProduct?.category
+    ? localProduct.category.charAt(0) + localProduct.category.slice(1).toLowerCase()
+    : null;
   const relatedProducts = allProducts.filter((p) => p.slug !== productSlug).slice(0, 4);
 
   usePageMeta({
@@ -3298,20 +3332,16 @@ function ProductDetailView({
     Array.isArray(attrs?.technical_specifications)
       ? (attrs.technical_specifications as { label: string; value: string }[]).map((s) => [s.label, s.value])
       : [];
-  const storedReviews = Array.isArray(attrs?.reviews)
-    ? (attrs.reviews as { name: string; role: string; text: string }[])
-    : null;
-  const reviewsEnabled = (attrs?.reviews_enabled as boolean | undefined) ?? true;
-  const descriptionEnabled = (attrs?.description_enabled as boolean | undefined) ?? true;
-  const specsEnabled = (attrs?.specs_enabled as boolean | undefined) ?? true;
   const longDescription = (attrs?.long_description as string | undefined) || null;
+  const descriptionEnabled = Boolean((attrs?.description_enabled as boolean | undefined) ?? true) && Boolean(longDescription ?? productDescription);
+  const specsEnabled = (attrs?.specs_enabled as boolean | undefined) ?? true;
 
-  const effectiveTab: 'description' | 'specs' | 'reviews' =
-    (selectedTab === 'description' && !descriptionEnabled) ||
-    (selectedTab === 'specs' && !specsEnabled) ||
-    (selectedTab === 'reviews' && !reviewsEnabled)
-      ? (descriptionEnabled ? 'description' : specsEnabled ? 'specs' : 'reviews')
-      : selectedTab;
+  const effectiveTab: 'description' | 'specs' =
+    selectedTab === 'description' && !descriptionEnabled
+      ? (specsEnabled ? 'specs' : 'description')
+      : selectedTab === 'specs' && !specsEnabled
+        ? 'description'
+        : (selectedTab as 'description' | 'specs');
 
   return (
     <motion.div
@@ -3330,9 +3360,11 @@ function ProductDetailView({
 
         <div className="relative z-10 mx-auto max-w-[1720px]">
           <div className="mb-6 flex items-center gap-4">
-            <span className="inline-flex rounded-full border border-[#d6e4ec] bg-white px-4 py-1 text-[10px] font-black uppercase tracking-[0.24em] text-[#7aa5c2] shadow-[0_8px_18px_rgba(107,154,187,0.12)]">
-              Flagship Core
-            </span>
+            {categoryLabel && (
+              <span className="inline-flex rounded-full border border-[#d6e4ec] bg-white px-4 py-1 text-[10px] font-black uppercase tracking-[0.24em] text-[#7aa5c2] shadow-[0_8px_18px_rgba(107,154,187,0.12)]">
+                {categoryLabel}
+              </span>
+            )}
             <button type="button" onClick={onBackToShop} className="text-sm font-bold text-[#5d95bc] hover:text-[#1d67a7]">
               Back to Catalog
             </button>
@@ -3369,14 +3401,21 @@ function ProductDetailView({
             </div>
 
             <div className="xl:pt-7">
-              <span className="inline-flex rounded-full border border-[#d6e4ec] bg-white px-4 py-1 text-[10px] font-black uppercase tracking-[0.24em] text-[#7aa5c2] shadow-[0_8px_18px_rgba(107,154,187,0.12)]">
-                Flagship Core
-              </span>
+              {categoryLabel && (
+                <span className="inline-flex rounded-full border border-[#d6e4ec] bg-white px-4 py-1 text-[10px] font-black uppercase tracking-[0.24em] text-[#7aa5c2] shadow-[0_8px_18px_rgba(107,154,187,0.12)]">
+                  {categoryLabel}
+                </span>
+              )}
               <h1 className="mt-4 text-5xl font-black uppercase tracking-[-0.08em] text-[#1f6dad] md:text-[78px] leading-[0.94]">{productName}</h1>
               <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
                 <span className="text-[46px] font-black tracking-[-0.06em] text-[#1f6dad]">{priceString}</span>
                 <span className={`text-[14px] font-black uppercase tracking-[0.08em] ${inStock ? 'text-[#3a9a34]' : 'text-[#bb5a42]'}`}>
                   {inStock ? 'In Stock - Limited Edition' : 'Out of Stock'}
+                </span>
+              </div>
+              <div className="mt-2">
+                <span className="inline-flex rounded-full border border-[#d6e4ec] bg-[linear-gradient(90deg,#eaf4fb_0%,#f0f8fd_100%)] px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-[#5a8dae]">
+                  {customerType === 'b2b' ? 'B2B Price' : 'B2C Price'}
                 </span>
               </div>
               <p className="mt-9 max-w-[600px] text-[21px] italic leading-[1.65] text-[#5d95bc]">
@@ -3431,7 +3470,7 @@ function ProductDetailView({
 
               <div className="mt-6 grid grid-cols-3 gap-4 text-center text-[11px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">
                 <div className="rounded-[16px] border border-[#d6e4ec] bg-white px-3 py-4 shadow-[0_10px_24px_rgba(107,154,187,0.12)]">Secure Payment</div>
-                <div className="rounded-[16px] border border-[#d6e4ec] bg-white px-3 py-4 shadow-[0_10px_24px_rgba(107,154,187,0.12)]">3 Year Warranty</div>
+                <div className="rounded-[16px] border border-[#d6e4ec] bg-white px-3 py-4 shadow-[0_10px_24px_rgba(107,154,187,0.12)]">Warranty</div>
                 <div className="rounded-[16px] border border-[#d6e4ec] bg-white px-3 py-4 shadow-[0_10px_24px_rgba(107,154,187,0.12)]">Global Priority</div>
               </div>
             </div>
@@ -3470,7 +3509,6 @@ function ProductDetailView({
             {([
               ...(descriptionEnabled ? [['description', 'Description']] : []),
               ...(specsEnabled ? [['specs', 'Technical Specifications']] : []),
-              ...(reviewsEnabled ? [['reviews', 'Reviews']] : []),
             ] as [string, string][]).map(([id, label]) => (
               <button
                 key={id}
@@ -3508,41 +3546,6 @@ function ProductDetailView({
                 </>
               )}
 
-              {effectiveTab === 'reviews' && (
-                <>
-                  <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-                    <div>
-                      <h2 className="text-4xl font-black tracking-[-0.06em] text-[#1f6dad] md:text-[58px]">User Feedback</h2>
-                      <div className="mt-3 flex items-center gap-3 text-[#5d95bc]">
-                        <div className="flex gap-1 text-[#76b7db]">{Array.from({ length: 5 }).map((_, i) => <Star key={i} size={16} fill="currentColor" />)}</div>
-                        <span className="text-sm font-bold">4.9/5 (Based on 142 reviews)</span>
-                      </div>
-                    </div>
-                    <button type="button" className="rounded-[14px] border border-[#d6e4ec] bg-white px-5 py-3 text-sm font-black text-[#1f6dad] shadow-[0_10px_24px_rgba(107,154,187,0.12)] transition-colors hover:bg-[#f3f9fd]">
-                      Write a Review
-                    </button>
-                  </div>
-                  <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
-                    {(storedReviews ?? [
-                      { name: 'Marcus Jensen', role: 'Lead 3D Artist', text: 'The transition from my previous gen to the Quantum X-8000 was night and day. Render times in Blender dropped by nearly 45%.' },
-                      { name: 'Sarah Lin', role: 'Systems Engineer', text: 'Installation was a breeze. The thermals are incredibly stable even under 100% load during long simulation runs.' },
-                      { name: 'David Byrne', role: 'Game Developer', text: 'High price tag, but you absolutely get what you pay for. The multi-threaded performance is unmatched in the consumer space.' },
-                    ]).map(({ name, role, text }) => (
-                      <div key={name} className="rounded-[22px] border border-[#d6e4ec] bg-white p-6 shadow-[0_12px_28px_rgba(107,154,187,0.12)]">
-                        <div className="mb-4 flex items-center justify-between">
-                          <div className="flex gap-1 text-[#76b7db]">{Array.from({ length: 5 }).map((_, i) => <Star key={i} size={14} fill="currentColor" />)}</div>
-                          <span className="text-[10px] font-black uppercase tracking-[0.18em] text-[#7ca0b8]">Verified</span>
-                        </div>
-                        <p className="text-sm leading-relaxed text-[#5d95bc]">&quot;{text}&quot;</p>
-                        <div className="mt-5">
-                          <div className="text-sm font-black text-[#1f6dad]">{name}</div>
-                          <div className="text-xs text-[#7ca0b8]">{role}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
             </div>
 
             <div className="space-y-5">
@@ -3555,28 +3558,6 @@ function ProductDetailView({
                 ))}
             </div>
           </div>
-
-          <section className="mt-16 overflow-hidden rounded-[28px] bg-[linear-gradient(90deg,#d7ebf5_0%,#d2e6f2_100%)] p-6 shadow-[0_16px_32px_rgba(107,154,187,0.12)] md:p-8">
-            <div className="grid grid-cols-1 gap-8 md:grid-cols-[0.88fr_1.12fr] md:items-center">
-              <div>
-                <span className="text-[11px] font-black uppercase tracking-[0.12em] text-[#67a0c4]">Innovative Cooling</span>
-                <h2 className="mt-5 text-4xl font-black tracking-[-0.06em] text-[#1f6dad] md:text-[56px]">AI-Driven Thermal Management</h2>
-                <p className="mt-5 max-w-3xl text-[19px] italic leading-[1.7] text-[#5d95bc]">
-                  The {productName} monitors its own thermal signatures at 10,000 intervals per second. Our neural-mesh adjusts power delivery dynamically, ensuring you hit peak performance without the thermal throttle common in standard high-performance chips.
-                </p>
-                <button type="button" className="mt-8 inline-flex items-center gap-3 text-sm font-black text-[#1f6dad]">
-                  Learn about Havtel Mesh Technology <ArrowRight size={16} />
-                </button>
-              </div>
-              <div className="relative min-h-[280px] overflow-hidden rounded-[24px] bg-[linear-gradient(180deg,#c9e2f0_0%,#c5deed_100%)]">
-                <div className="absolute left-1/2 top-1/2 h-40 w-40 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#7db8dd]/55 blur-[38px]"></div>
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.18),transparent_36%)]"></div>
-                <div className="absolute bottom-5 right-5 flex h-10 w-10 items-center justify-center rounded-full bg-white/80 text-[#1f6dad] shadow-[0_10px_20px_rgba(107,154,187,0.16)]">
-                  <ArrowRight size={18} />
-                </div>
-              </div>
-            </div>
-          </section>
 
           <section className="mt-20">
             <div className="mb-8 flex items-center justify-between">
@@ -4527,8 +4508,37 @@ function PreorderView({
   );
 }
 
+function collectDescendantIds(categoryId: string, cats: import('./lib/api').Category[]): Set<string> {
+  const ids = new Set<string>();
+  const collect = (list: import('./lib/api').Category[]): boolean => {
+    for (const c of list) {
+      if (c.id === categoryId) {
+        const subtree = (node: import('./lib/api').Category) => { ids.add(node.id); node.children.forEach(subtree); };
+        subtree(c);
+        return true;
+      }
+      if (c.children.length && collect(c.children)) return true;
+    }
+    return false;
+  };
+  collect(cats);
+  return ids;
+}
+
+function findCategoryById(categoryId: string, cats: import('./lib/api').Category[]): import('./lib/api').Category | null {
+  for (const c of cats) {
+    if (c.id === categoryId) return c;
+    if (c.children.length) {
+      const found = findCategoryById(categoryId, c.children);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, onSaveProduct }: { products: Product[]; categories: Category[]; isLoading: boolean; onAddToCart: (slug: string, variantId?: string, quantity?: number) => void; onProductSelect: (slug: string) => void; onSaveProduct: (productSlug: string, quantity?: number) => Promise<void>; key?: string }) {
   const [activeCategory, setActiveCategory] = useState('');
+  const [expandedParentId, setExpandedParentId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('Popularity');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -4536,8 +4546,11 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const PRODUCTS_PER_PAGE = 9;
 
+  const activeCategoryIds = activeCategory ? collectDescendantIds(activeCategory, categories) : null;
+  const activeCategoryNode = activeCategory ? findCategoryById(activeCategory, categories) : null;
+
   const filteredProducts = products.filter(prod => {
-    const matchesCategory = !activeCategory || prod.category === activeCategory;
+    const matchesCategory = !activeCategoryIds || activeCategoryIds.has(prod.categoryId);
     const matchesSearch = prod.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          prod.series.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch;
@@ -4551,9 +4564,9 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
   const safePage = Math.min(currentPage, totalPages);
   const pagedProducts = filteredProducts.slice((safePage - 1) * PRODUCTS_PER_PAGE, safePage * PRODUCTS_PER_PAGE);
 
-  const displayCategory = activeCategory || 'All Products';
-  const categoryDescription = activeCategory
-    ? `Browse our selection of next-generation ${activeCategory.toLowerCase()}, engineered for extreme performance.`
+  const displayCategory = activeCategoryNode?.name ?? 'All Products';
+  const categoryDescription = activeCategoryNode
+    ? `Browse our selection of next-generation ${activeCategoryNode.name.toLowerCase()}, engineered for extreme performance.`
     : 'Browse our full catalog of next-generation hardware, engineered for extreme performance.';
 
   return (
@@ -4590,6 +4603,8 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
                 type="button"
                 onClick={() => {
                   setActiveCategory('');
+                  setExpandedParentId('');
+                  setCurrentPage(1);
                   setIsSidebarOpen(false);
                 }}
                 className={`flex w-full items-center justify-center rounded-[12px] px-5 py-3 text-center text-[14px] font-black uppercase tracking-[-0.02em] transition-all ${
@@ -4601,23 +4616,55 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
                 All
               </button>
               {categories.filter(c => c.is_active).map((cat) => {
-                const catKey = cat.name.toUpperCase();
+                const isExpanded = expandedParentId === cat.id;
+                const activeChildren = cat.children.filter(c => c.is_active);
                 return (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => {
-                      setActiveCategory(catKey);
-                      setIsSidebarOpen(false);
-                    }}
-                    className={`flex w-full items-center justify-center rounded-[12px] px-5 py-3 text-center text-[14px] font-black uppercase tracking-[-0.02em] transition-all ${
-                      activeCategory === catKey
-                        ? 'bg-[linear-gradient(90deg,#97c7e4_0%,#add9ef_100%)] text-[#1b4f7e] shadow-[0_14px_30px_rgba(95,168,215,0.16)]'
-                        : 'text-[#1d67a7] hover:bg-white/50'
-                    }`}
-                  >
-                    {cat.name}
-                  </button>
+                  <div key={cat.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExpandedParentId(cat.id);
+                        setActiveCategory(cat.id);
+                        setCurrentPage(1);
+                        setIsSidebarOpen(activeChildren.length === 0);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-[12px] px-5 py-3 text-[14px] font-black uppercase tracking-[-0.02em] transition-all ${
+                        activeCategory === cat.id
+                          ? 'bg-[linear-gradient(90deg,#97c7e4_0%,#add9ef_100%)] text-[#1b4f7e] shadow-[0_14px_30px_rgba(95,168,215,0.16)]'
+                          : 'text-[#1d67a7] hover:bg-white/50'
+                      }`}
+                    >
+                      <span>{cat.name}</span>
+                      {activeChildren.length > 0 && (
+                        <ChevronRight
+                          size={14}
+                          className={`shrink-0 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
+                        />
+                      )}
+                    </button>
+                    {isExpanded && activeChildren.length > 0 && (
+                      <div className="mt-1 space-y-1 pl-3">
+                        {activeChildren.map((child) => (
+                          <button
+                            key={child.id}
+                            type="button"
+                            onClick={() => {
+                              setActiveCategory(child.id);
+                              setCurrentPage(1);
+                              setIsSidebarOpen(false);
+                            }}
+                            className={`flex w-full items-center rounded-[10px] px-4 py-2 text-left text-[12px] font-bold uppercase tracking-[-0.01em] transition-all ${
+                              activeCategory === child.id
+                                ? 'bg-[linear-gradient(90deg,#b8ddf2_0%,#c8e7f5_100%)] text-[#1b4f7e] shadow-[0_8px_20px_rgba(95,168,215,0.14)]'
+                                : 'text-[#4a8ab0] hover:bg-white/50'
+                            }`}
+                          >
+                            {child.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
               {isLoading ? <div className="px-2 py-3 text-xs text-[#6d8397]">Loading categories...</div> : null}
