@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePhoneInput, defaultCountries, parseCountry } from 'react-international-phone';
 import { isValidPhoneNumber } from 'libphonenumber-js';
 import { trackPageView } from './lib/analytics';
@@ -21,7 +21,6 @@ import {
   Globe,
   Share2,
   ShieldCheck,
-  MessageSquare,
   Search,
   MapPin,
   Mail,
@@ -55,6 +54,7 @@ import {
   CircuitBoard,
   ChevronLeft,
   Package,
+  Download,
   LogOut,
   Send,
   type LucideIcon,
@@ -100,7 +100,7 @@ import {
   type Reservation,
 } from './lib/api';
 
-type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot' | 'preorder';
+type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot' | 'preorder' | 'privacy' | 'terms';
 
 const PAGE_META: Partial<Record<View, { title: string; description: string }>> = {
   home:     { title: 'Havtel',    description: 'Premium tech hardware — servers, networking gear, and more.' },
@@ -111,7 +111,15 @@ const PAGE_META: Partial<Record<View, { title: string; description: string }>> =
   cart:     { title: 'Cart',      description: '' },
   shipping: { title: 'Checkout',  description: '' },
   payment:  { title: 'Payment',   description: '' },
+  privacy:  { title: 'Privacy Policy', description: 'How Havtel Corp collects, uses, and protects your personal information.' },
+  terms:    { title: 'Terms of Use',   description: 'Terms governing the use of www.nitrotelmanufacturing.com.' },
 };
+
+function navigateToPath(href: string) {
+  if (window.location.pathname === href) return;
+  window.history.pushState(null, '', href);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}
 
 interface Product {
   id: string;
@@ -1087,7 +1095,6 @@ export default function App() {
           {[
             { key: 'home', label: 'HOME', target: 'home' as View, active: view === 'home' },
             { key: 'shop', label: 'SHOP', target: 'shop' as View, active: view === 'shop' || view === 'product' },
-            { key: 'discover', label: 'DISCOVER', target: 'shop' as View, active: false },
             { key: 'support', label: 'SUPPORT', target: 'support' as View, active: view === 'support' },
           ].map((item) => (
             <button
@@ -1256,6 +1263,10 @@ export default function App() {
             onGoHome={() => setView('home')}
             onGoToLogin={() => setView('login')}
           />
+        ) : view === 'privacy' ? (
+          <PrivacyPolicy key="privacy" />
+        ) : view === 'terms' ? (
+          <TermsOfUse key="terms" />
         ) : view === 'shop' ? (
           <Shop key="shop" products={products} categories={categories} isLoading={isLoadingProducts} onAddToCart={addToCart} onProductSelect={openProduct} onSaveProduct={async (productSlug, quantity = 1) => {
               if (!authSession?.access_token) { requireAuthForView('shop'); return; }
@@ -1551,17 +1562,47 @@ export default function App() {
           <div>
             <h4 className="text-white font-bold mb-5 uppercase tracking-wider text-xs">Resources</h4>
             <ul className="space-y-3">
-              <li><a className="hover:text-white transition-colors" href="#">Support</a></li>
-              <li><a className="hover:text-white transition-colors" href="#">Investrors</a></li>
-              <li><a className="hover:text-white transition-colors" href="#">Sustainability</a></li>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => setView('support')}
+                  className="hover:text-white transition-colors text-left"
+                >
+                  Support
+                </button>
+              </li>
             </ul>
           </div>
           <div>
             <h4 className="text-white font-bold mb-5 uppercase tracking-wider text-xs">Legal</h4>
             <ul className="space-y-3">
-              <li><a className="hover:text-white transition-colors" href="#">Privacy Policy</a></li>
-              <li><a className="hover:text-white transition-colors" href="#">Terms of Service</a></li>
-              <li><a className="hover:text-white transition-colors" href="#">Contact</a></li>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => setView('privacy')}
+                  className="hover:text-white transition-colors text-left"
+                >
+                  Privacy Policy
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => setView('terms')}
+                  className="hover:text-white transition-colors text-left"
+                >
+                  Terms of Use
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => setView('support')}
+                  className="hover:text-white transition-colors text-left"
+                >
+                  Contact
+                </button>
+              </li>
             </ul>
           </div>
           <div>
@@ -1584,13 +1625,6 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Floating Action Button */}
-      <button className="fixed bottom-8 right-8 w-16 h-16 bg-gradient-to-br from-[#aac7ff] to-[#3e90ff] rounded-full shadow-2xl flex items-center justify-center text-[#003064] hover:scale-110 active:scale-95 transition-transform z-40 group">
-        <MessageSquare size={28} />
-        <span className="absolute right-full mr-4 bg-[#31353b] px-4 py-2 rounded-lg text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap text-white">
-          Expert Support
-        </span>
-      </button>
       </>
       )}
     </div>
@@ -1966,8 +2000,20 @@ function ShoppingBagView({
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>© 2026 HAVTEL CORP. All Rights Reserved</div>
           <div className="flex flex-wrap gap-6">
-            <span>Privacy Policy</span>
-            <span>Terms of Service</span>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/privacy-policy')}
+              className="transition-colors hover:text-white"
+            >
+              Privacy Policy
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/terms-of-use')}
+              className="transition-colors hover:text-white"
+            >
+              Terms of Use
+            </button>
             <span>Help Center</span>
           </div>
         </div>
@@ -2547,8 +2593,20 @@ function ShippingView({
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>© 2026 HAVTEL CORP. All Rights Reserved</div>
           <div className="flex flex-wrap gap-6">
-            <span>Privacy Policy</span>
-            <span>Terms of Service</span>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/privacy-policy')}
+              className="transition-colors hover:text-white"
+            >
+              Privacy Policy
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/terms-of-use')}
+              className="transition-colors hover:text-white"
+            >
+              Terms of Use
+            </button>
             <span>Help Center</span>
           </div>
         </div>
@@ -2773,8 +2831,20 @@ function PaymentView({
         <div className="mx-auto flex max-w-[1600px] flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="text-xs font-bold uppercase tracking-[0.16em] text-white/50">© 2026 HAVTEL CORP. All Rights Reserved</div>
           <div className="flex flex-wrap gap-6 text-xs font-bold uppercase tracking-[0.16em] text-white/50">
-            <span>Privacy Policy</span>
-            <span>Terms of Service</span>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/privacy-policy')}
+              className="transition-colors hover:text-white"
+            >
+              Privacy Policy
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/terms-of-use')}
+              className="transition-colors hover:text-white"
+            >
+              Terms of Use
+            </button>
             <span>Help Center</span>
           </div>
         </div>
@@ -2946,8 +3016,20 @@ function OrderConfirmedView({
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="text-xs font-bold uppercase tracking-[0.16em] text-white/50">© 2026 HAVTEL CORP. All Rights Reserved</div>
           <div className="flex flex-wrap gap-6 text-xs font-bold uppercase tracking-[0.16em] text-white/50">
-            <span>Privacy Policy</span>
-            <span>Terms of Service</span>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/privacy-policy')}
+              className="transition-colors hover:text-white"
+            >
+              Privacy Policy
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/terms-of-use')}
+              className="transition-colors hover:text-white"
+            >
+              Terms of Use
+            </button>
             <span>Help Center</span>
           </div>
         </div>
@@ -3213,8 +3295,20 @@ function TrackOrderView({
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="text-xs font-bold uppercase tracking-[0.16em] text-white/50">© 2026 HAVTEL CORP. All Rights Reserved</div>
           <div className="flex flex-wrap gap-6 text-xs font-bold uppercase tracking-[0.16em] text-white/50">
-            <span>Privacy Policy</span>
-            <span>Terms of Service</span>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/privacy-policy')}
+              className="transition-colors hover:text-white"
+            >
+              Privacy Policy
+            </button>
+            <button
+              type="button"
+              onClick={() => navigateToPath('/terms-of-use')}
+              className="transition-colors hover:text-white"
+            >
+              Terms of Use
+            </button>
             <span>Help Center</span>
           </div>
         </div>
@@ -3335,6 +3429,9 @@ function ProductDetailView({
   const longDescription = (attrs?.long_description as string | undefined) || null;
   const descriptionEnabled = Boolean((attrs?.description_enabled as boolean | undefined) ?? true) && Boolean(longDescription ?? productDescription);
   const specsEnabled = (attrs?.specs_enabled as boolean | undefined) ?? true;
+  const specPdfUrl = attrs?.spec_pdf_url as string | undefined;
+  const specPdfFilename = attrs?.spec_pdf_filename as string | undefined;
+  const specPdfEnabled = Boolean(attrs?.spec_pdf_enabled) && Boolean(specPdfUrl);
 
   const effectiveTab: 'description' | 'specs' =
     selectedTab === 'description' && !descriptionEnabled
@@ -3543,6 +3640,20 @@ function ProductDetailView({
                       </div>
                     ))}
                   </div>
+                  {specPdfEnabled && specPdfUrl && (
+                    <div className="mt-8">
+                      <a
+                        href={specPdfUrl}
+                        download={specPdfFilename || 'specifications.pdf'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-3 rounded-[14px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-7 py-4 text-sm font-black uppercase tracking-[0.14em] text-white shadow-[0_14px_30px_rgba(13,77,138,0.24)] transition-transform hover:scale-[1.01]"
+                      >
+                        <Download size={18} />
+                        Download Specifications
+                      </a>
+                    </div>
+                  )}
                 </>
               )}
 
@@ -4334,22 +4445,22 @@ function Home({ products, onShopClick, onProductSelect }: { products: Product[];
         </div>
       </section>
 
+      {spotlightProduct && (
       <section className="px-6 py-16 md:px-12 lg:px-20">
         <div className="mx-auto grid max-w-[1320px] gap-8 rounded-[38px] border border-white/40 bg-[linear-gradient(135deg,rgba(250,246,238,0.96)_0%,rgba(233,246,251,0.92)_100%)] p-7 shadow-[0_28px_70px_rgba(53,97,133,0.14)] md:grid-cols-[minmax(0,1fr)_360px] md:p-10">
           <div className="max-w-xl">
             <span className="inline-flex rounded-full border border-[#d7e8f2] bg-white/65 px-4 py-1 text-[10px] font-black uppercase tracking-[0.3em] text-[#8e7c57]">
-              Flagship Collection
+              {spotlightProduct.series || 'Featured Product'}
             </span>
             <h2 className="mt-6 text-4xl font-black tracking-[-0.06em] text-[#2b5f95] md:text-6xl">
-              Quantum
-              <br />
-              X-Series
+              {spotlightProduct.name}
             </h2>
             <p className="mt-5 max-w-lg text-base leading-7 text-[#56728c]">
-              The next wave of enterprise hardware, engineered for resilient performance, efficient scaling, and modern infrastructure rollouts.
+              {spotlightProduct.description?.trim()
+                || `Discover ${spotlightProduct.name} — engineered for the demands of modern infrastructure.`}
             </p>
             <button
-              onClick={() => spotlightProduct && onProductSelect(spotlightProduct.slug)}
+              onClick={() => onProductSelect(spotlightProduct.slug)}
               className="mt-8 rounded-[18px] bg-[linear-gradient(180deg,#0f5ca0_0%,#0a477e_100%)] px-7 py-4 text-sm font-black uppercase tracking-[0.22em] text-white shadow-[0_18px_35px_rgba(11,79,145,0.24)] transition-transform hover:scale-[1.01]"
             >
               Explore Now
@@ -4376,6 +4487,7 @@ function Home({ products, onShopClick, onProductSelect }: { products: Product[];
           </div>
         </div>
       </section>
+      )}
 
       <section className="px-6 py-16 md:px-12 lg:px-20">
         <div className="mx-auto max-w-[1320px]">
@@ -4544,7 +4656,14 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [priceFilter, setPriceFilter] = useState<[number, number] | null>(null);
   const PRODUCTS_PER_PAGE = 9;
+
+  const priceBounds = useMemo<[number, number] | null>(() => {
+    const prices = products.map((p) => p.price).filter((p) => p > 0);
+    if (prices.length === 0) return null;
+    return [Math.floor(Math.min(...prices)), Math.ceil(Math.max(...prices))];
+  }, [products]);
 
   const activeCategoryIds = activeCategory ? collectDescendantIds(activeCategory, categories) : null;
   const activeCategoryNode = activeCategory ? findCategoryById(activeCategory, categories) : null;
@@ -4553,7 +4672,8 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
     const matchesCategory = !activeCategoryIds || activeCategoryIds.has(prod.categoryId);
     const matchesSearch = prod.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          prod.series.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCategory && matchesSearch;
+    const matchesPrice = !priceFilter || (prod.price >= priceFilter[0] && prod.price <= priceFilter[1]);
+    return matchesCategory && matchesSearch && matchesPrice;
   }).sort((a, b) => {
     if (sortBy === 'Price: Low to High') return a.price - b.price;
     if (sortBy === 'Price: High to Low') return b.price - a.price;
@@ -4670,6 +4790,120 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
               {isLoading ? <div className="px-2 py-3 text-xs text-[#6d8397]">Loading categories...</div> : null}
             </nav>
           </div>
+
+          {priceBounds && priceBounds[0] < priceBounds[1] && (() => {
+            const [boundMin, boundMax] = priceBounds;
+            const currentMin = priceFilter?.[0] ?? boundMin;
+            const currentMax = priceFilter?.[1] ?? boundMax;
+            const range = boundMax - boundMin;
+            const pctMin = ((currentMin - boundMin) / range) * 100;
+            const pctMax = ((currentMax - boundMin) / range) * 100;
+            const isFiltering = priceFilter !== null && (currentMin > boundMin || currentMax < boundMax);
+            const thumbClass =
+              "pointer-events-none absolute inset-0 h-full w-full appearance-none bg-transparent " +
+              "[&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:appearance-none " +
+              "[&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full " +
+              "[&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#1d67a7] " +
+              "[&::-webkit-slider-thumb]:shadow-[0_4px_10px_rgba(29,103,167,0.3)] [&::-webkit-slider-thumb]:cursor-pointer " +
+              "[&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 " +
+              "[&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border-2 " +
+              "[&::-moz-range-thumb]:border-[#1d67a7] [&::-moz-range-thumb]:cursor-pointer " +
+              "[&::-moz-range-track]:bg-transparent";
+            return (
+              <div className="mb-10">
+                <div className="mb-4 flex items-center justify-between">
+                  <span className="text-[11px] font-black uppercase tracking-[0.16em] text-[#1d67a7]">Price Range</span>
+                  {isFiltering && (
+                    <button
+                      type="button"
+                      onClick={() => { setPriceFilter(null); setCurrentPage(1); }}
+                      className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#1d67a7] hover:underline"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+
+                <div className="mb-3 flex items-center justify-between text-[13px] font-black text-[#1b4f7e]">
+                  <span>{formatCurrency(currentMin)}</span>
+                  <span className="text-[#76a0bc]">–</span>
+                  <span>{formatCurrency(currentMax)}</span>
+                </div>
+
+                <div className="relative h-6">
+                  <div className="absolute left-0 right-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-[#d5e6ef]" />
+                  <div
+                    className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-[linear-gradient(90deg,#97c7e4_0%,#1d67a7_100%)]"
+                    style={{ left: `${pctMin}%`, right: `${100 - pctMax}%` }}
+                  />
+                  <input
+                    type="range"
+                    min={boundMin}
+                    max={boundMax}
+                    value={currentMin}
+                    onChange={(e) => {
+                      const v = Math.min(Number(e.target.value), currentMax - 1);
+                      setPriceFilter([v, currentMax]);
+                      setCurrentPage(1);
+                    }}
+                    className={thumbClass}
+                    aria-label="Minimum price"
+                  />
+                  <input
+                    type="range"
+                    min={boundMin}
+                    max={boundMax}
+                    value={currentMax}
+                    onChange={(e) => {
+                      const v = Math.max(Number(e.target.value), currentMin + 1);
+                      setPriceFilter([currentMin, v]);
+                      setCurrentPage(1);
+                    }}
+                    className={thumbClass}
+                    aria-label="Maximum price"
+                  />
+                </div>
+
+                <div className="mt-4 flex items-center gap-2">
+                  <div className="flex flex-1 items-center rounded-[10px] border border-[#d5e6ef] bg-white px-2 py-1.5">
+                    <span className="text-[10px] font-bold text-[#76a0bc]">$</span>
+                    <input
+                      type="number"
+                      min={boundMin}
+                      max={boundMax}
+                      value={currentMin}
+                      onChange={(e) => {
+                        const raw = Number(e.target.value);
+                        if (!Number.isFinite(raw)) return;
+                        const v = Math.max(boundMin, Math.min(raw, currentMax - 1));
+                        setPriceFilter([v, currentMax]);
+                        setCurrentPage(1);
+                      }}
+                      className="w-full bg-transparent text-right text-[12px] font-bold text-[#1b4f7e] outline-none"
+                    />
+                  </div>
+                  <span className="text-[10px] text-[#76a0bc]">–</span>
+                  <div className="flex flex-1 items-center rounded-[10px] border border-[#d5e6ef] bg-white px-2 py-1.5">
+                    <span className="text-[10px] font-bold text-[#76a0bc]">$</span>
+                    <input
+                      type="number"
+                      min={boundMin}
+                      max={boundMax}
+                      value={currentMax}
+                      onChange={(e) => {
+                        const raw = Number(e.target.value);
+                        if (!Number.isFinite(raw)) return;
+                        const v = Math.min(boundMax, Math.max(raw, currentMin + 1));
+                        setPriceFilter([currentMin, v]);
+                        setCurrentPage(1);
+                      }}
+                      className="w-full bg-transparent text-right text-[12px] font-bold text-[#1b4f7e] outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
         </aside>
 
@@ -5912,6 +6146,575 @@ function OrderHistory({
   );
 }
 
+
+type LegalSection = {
+  id: string;
+  number: number;
+  title: string;
+  body: React.ReactNode;
+};
+
+function LegalDocumentLayout({
+  eyebrow,
+  title,
+  intro,
+  effectiveDate,
+  sections,
+}: {
+  eyebrow: string;
+  title: string;
+  intro: string;
+  effectiveDate: string;
+  sections: LegalSection[];
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="min-h-screen bg-[linear-gradient(90deg,#ffffff_0%,#fbf7f4_70%,#fff6df_100%)] pt-20"
+    >
+      <section className="relative overflow-hidden px-8 py-16 md:px-16 md:py-20">
+        <div className="absolute inset-0">
+          <div className="absolute left-[-8%] top-[8%] h-[420px] w-[420px] rounded-full bg-[#e4f3fb] blur-[120px]"></div>
+          <div className="absolute right-[2%] top-[4%] h-[520px] w-[520px] rounded-full bg-[#f8f1eb] blur-[140px]"></div>
+        </div>
+
+        <div className="relative z-10 mx-auto max-w-[1720px]">
+          <div className="mb-12 max-w-[1220px] md:mb-14">
+            <span className="mb-6 block text-[12px] font-black uppercase tracking-[0.18em] text-[#5c95bd]">{eyebrow}</span>
+            <h1 className="text-5xl font-black uppercase tracking-[-0.08em] text-[#1f6dad] md:text-[72px] lg:text-[82px]">
+              {title}
+            </h1>
+            <p className="mt-6 max-w-[940px] text-[18px] italic leading-[1.7] text-[#5d95bc]">{intro}</p>
+            <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-[12px] font-bold uppercase tracking-[0.14em] text-[#1f5078]/70">
+              <span>Effective {effectiveDate}</span>
+              <span>Havtel Corp · DBA Nitrotel Manufacturing</span>
+              <span>4626 SW 147th Ct, Miami, FL 33185</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 items-start gap-10 xl:grid-cols-[280px_minmax(0,1fr)] xl:gap-14">
+            <aside className="xl:sticky xl:top-28">
+              <div className="rounded-[18px] border border-[#d3e3ec] bg-white/85 p-6 shadow-[0_14px_30px_rgba(107,154,187,0.12)] backdrop-blur">
+                <div className="mb-4 text-[11px] font-black uppercase tracking-[0.18em] text-[#5c95bd]">Contents</div>
+                <ol className="space-y-2">
+                  {sections.map((s) => (
+                    <li key={s.id}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const el = document.getElementById(s.id);
+                          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }}
+                        className="block w-full rounded-md px-2 py-1.5 text-left text-[13px] font-semibold leading-snug text-[#1f5078]/85 transition-colors hover:bg-[#eaf2f8] hover:text-[#1f6dad]"
+                      >
+                        <span className="mr-2 text-[#5c95bd]">{s.number}.</span>
+                        {s.title}
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </aside>
+
+            <article className="rounded-[18px] border border-[#d6e4ec] bg-white/90 p-8 shadow-[0_14px_30px_rgba(107,154,187,0.12)] md:p-12">
+              <div className="space-y-12">
+                {sections.map((s) => (
+                  <section key={s.id} id={s.id} className="scroll-mt-28">
+                    <div className="mb-4 flex items-baseline gap-3">
+                      <span className="text-[14px] font-black uppercase tracking-[0.14em] text-[#5c95bd]">{String(s.number).padStart(2, '0')}</span>
+                      <h2 className="text-[26px] font-black tracking-[-0.04em] text-[#1f6dad] md:text-[30px]">{s.title}</h2>
+                    </div>
+                    <div className="space-y-4 text-[15.5px] leading-[1.75] text-[#1f5078]/90 [&_strong]:text-[#1f6dad] [&_a]:text-[#1f6dad] [&_a]:underline [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:space-y-2 [&_li]:leading-[1.65]">
+                      {s.body}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+    </motion.div>
+  );
+}
+
+function PrivacyPolicy() {
+  const sections: LegalSection[] = [
+    {
+      id: 'who-we-are',
+      number: 1,
+      title: 'Who We Are',
+      body: (
+        <p>
+          Havtel Corp (&quot;we&quot;, &quot;our&quot;, the &quot;Company&quot;) operates www.nitrotelmanufacturing.com.
+          This policy describes what personal data we collect, how we use it, with whom we share it, and the rights
+          you have under CCPA/CPRA, VCDPA, CTDPA, CPA, UCPA, FDBR, and other applicable state laws.
+        </p>
+      ),
+    },
+    {
+      id: 'categories',
+      number: 2,
+      title: 'Categories of Personal Information Collected',
+      body: (
+        <>
+          <p>In the past twelve (12) months we have collected the following categories under CCPA/CPRA 1798.140(v):</p>
+          <ul>
+            <li><strong>Identifiers:</strong> name, alias, postal address, IP, email, unique personal identifier, online identifier.</li>
+            <li><strong>Customer Records (Cal. Civ. 1798.80(e)):</strong> address, phone, credit card (processed via gateway).</li>
+            <li><strong>Commercial information:</strong> products purchased, considered, or returned.</li>
+            <li><strong>Internet activity:</strong> browsing history, searches, ad interactions.</li>
+            <li><strong>Geolocation</strong> (non-precise unless explicit consent).</li>
+            <li><strong>Inferences</strong> drawn to create a customer profile.</li>
+            <li><strong>Sensitive information (CPRA):</strong> only if you voluntarily provide it (e.g., account credentials).</li>
+          </ul>
+        </>
+      ),
+    },
+    {
+      id: 'sources',
+      number: 3,
+      title: 'Sources of Information',
+      body: (
+        <p>
+          We receive information: (a) directly from you (registration, purchase, support); (b) automatically (cookies,
+          pixels, logs); (c) from third parties (payment processors, carriers, ad platforms, anti-fraud agencies).
+        </p>
+      ),
+    },
+    {
+      id: 'purposes',
+      number: 4,
+      title: 'Purposes of Processing',
+      body: (
+        <ul>
+          <li>Process orders, payments, shipping, and returns.</li>
+          <li>Manage accounts, customer support, and transactional communications.</li>
+          <li>Marketing and personalized advertising (with consent where applicable).</li>
+          <li>Prevent fraud, abuse, and security violations.</li>
+          <li>Comply with legal obligations (tax, EAR, OFAC, AML).</li>
+          <li>Improve the Site through analytics and A/B testing.</li>
+        </ul>
+      ),
+    },
+    {
+      id: 'sharing',
+      number: 5,
+      title: 'Disclosure to Third Parties — Sale and Sharing under CPRA',
+      body: (
+        <p>
+          We share personal information with: payment processors, carriers, IT/cloud providers, email/CRM platforms,
+          ad platforms, authorities when legally required. Under CPRA, use of third-party cookies for cross-context
+          behavioral advertising may qualify as &quot;sale&quot; or &quot;sharing&quot;. You have the right to opt out
+          via the &quot;Your Privacy Choices&quot; link in the Site footer. We honor the Global Privacy Control (GPC) signal.
+        </p>
+      ),
+    },
+    {
+      id: 'retention',
+      number: 6,
+      title: 'Data Retention',
+      body: (
+        <p>
+          We retain your information while your account is active, for the period necessary to fulfill the described
+          purposes, and for the term required by applicable tax and commercial laws (typically 7 years for accounting records).
+        </p>
+      ),
+    },
+    {
+      id: 'your-rights',
+      number: 7,
+      title: 'Your Rights (CCPA/CPRA, VCDPA, CTDPA, CPA, UCPA, FDBR)',
+      body: (
+        <>
+          <ul>
+            <li><strong>Know:</strong> request detail of personal information we hold about you.</li>
+            <li><strong>Access:</strong> obtain a portable copy.</li>
+            <li><strong>Correct:</strong> request rectification of inaccurate data.</li>
+            <li><strong>Delete:</strong> request deletion (subject to legal exceptions).</li>
+            <li><strong>Opt out of sale/sharing</strong> (Do Not Sell or Share).</li>
+            <li><strong>Limit</strong> use of sensitive personal information.</li>
+            <li><strong>Non-discrimination:</strong> we will not retaliate for exercising rights.</li>
+            <li><strong>Appeal</strong> denials (VA, CT, CO).</li>
+          </ul>
+          <p>
+            To exercise rights: email <a href="mailto:sales@nitrotelmanufacturing.com">sales@nitrotelmanufacturing.com</a> or
+            use the form at www.nitrotelmanufacturing.com/privacy-request. We will verify your identity before processing.
+            Response time: 45 days (extendable 45 additional days with notice).
+          </p>
+        </>
+      ),
+    },
+    {
+      id: 'authorized-agent',
+      number: 8,
+      title: 'Authorized Agent',
+      body: (
+        <p>
+          You may designate an authorized agent to submit requests on your behalf. The agent must show written
+          authorization signed by you; we may also require direct verification with you.
+        </p>
+      ),
+    },
+    {
+      id: 'minors',
+      number: 9,
+      title: 'Minors',
+      body: (
+        <p>
+          The Site is not directed to children under 16. We do not knowingly collect personal information from minors.
+          If we become aware, we will delete the data. We do not sell or share personal information of minors under 16
+          without affirmative opt-in.
+        </p>
+      ),
+    },
+    {
+      id: 'cookies',
+      number: 10,
+      title: 'Cookies and Similar Technologies',
+      body: (
+        <p>
+          See Cookie Policy for full detail. We honor the GPC signal. The consent banner allows Accept All, Reject All,
+          or Customize.
+        </p>
+      ),
+    },
+    {
+      id: 'security',
+      number: 11,
+      title: 'Security',
+      body: (
+        <p>
+          We implement reasonable technical and organizational measures: TLS encryption in transit, AES-256 encryption
+          at rest for sensitive PII, role-based access control, MFA for staff with data access, audit logs, periodic
+          vulnerability assessments. No system is 100% secure.
+        </p>
+      ),
+    },
+    {
+      id: 'international',
+      number: 12,
+      title: 'International Transfers',
+      body: (
+        <p>
+          Data may be processed in the U.S. and countries where our providers operate. We apply standard contractual
+          clauses where legally required.
+        </p>
+      ),
+    },
+    {
+      id: 'financial-incentive',
+      number: 13,
+      title: 'Notice of Financial Incentive (CPRA 1798.125)',
+      body: (
+        <p>
+          Loyalty programs and exclusive offers may constitute a financial incentive. The estimated value of your
+          personal information is calculated based on average acquisition cost. You may enroll and unsubscribe at any time.
+        </p>
+      ),
+    },
+    {
+      id: 'shine-the-light',
+      number: 14,
+      title: 'California Shine the Light (Cal. Civ. 1798.83)',
+      body: (
+        <p>
+          California residents may request once a year free disclosure of information shared with third parties for
+          direct marketing by emailing <a href="mailto:sales@nitrotelmanufacturing.com">sales@nitrotelmanufacturing.com</a>.
+        </p>
+      ),
+    },
+    {
+      id: 'changes',
+      number: 15,
+      title: 'Changes to this Policy',
+      body: (
+        <p>
+          We will post any change on this page with a new effective date. Material changes will be notified by email
+          or prominent Site notice.
+        </p>
+      ),
+    },
+    {
+      id: 'privacy-contact',
+      number: 16,
+      title: 'Privacy Officer Contact',
+      body: (
+        <p>
+          Havtel Corp — Privacy Office<br />
+          4626 SW 147th Ct, Miami, FL 33185<br />
+          <a href="mailto:sales@nitrotelmanufacturing.com">sales@nitrotelmanufacturing.com</a> · (786) 409-3741
+        </p>
+      ),
+    },
+  ];
+
+  return (
+    <LegalDocumentLayout
+      eyebrow="Legal Document"
+      title="Privacy Policy"
+      intro="How Havtel Corp collects, uses, shares, and protects your personal information, and the rights you can exercise under U.S. state privacy laws."
+      effectiveDate="May 1, 2026"
+      sections={sections}
+    />
+  );
+}
+
+function TermsOfUse() {
+  const sections: LegalSection[] = [
+    {
+      id: 'acceptance',
+      number: 1,
+      title: 'Acceptance of Terms',
+      body: (
+        <p>
+          By accessing, browsing, or making a purchase on www.nitrotelmanufacturing.com (the &quot;Site&quot;), you
+          represent that you have read, understood, and agree to be legally bound by these Terms of Use (the
+          &quot;Terms&quot;), our Privacy Policy, and all referenced policies. If you do not agree, do not use the Site.
+        </p>
+      ),
+    },
+    {
+      id: 'eligibility',
+      number: 2,
+      title: 'Eligibility and Accounts',
+      body: (
+        <p>
+          The Site is intended for individuals 18 years or older. By creating an account, you represent that you are of
+          legal age, have legal capacity, and provide truthful information. You are responsible for keeping your
+          credentials confidential and for all activity under your account. Notify us immediately of any unauthorized use.
+        </p>
+      ),
+    },
+    {
+      id: 'orders',
+      number: 3,
+      title: 'Orders, Pricing, Payment, and Taxes',
+      body: (
+        <p>
+          All orders are subject to acceptance and availability. We reserve the right to refuse, cancel, or limit orders
+          for any reason, including typographical errors in price or description. Prices are in USD and exclude taxes,
+          shipping, and duties unless otherwise stated. Sales tax is calculated based on the delivery jurisdiction
+          applying post-Wayfair economic nexus criteria (South Dakota v. Wayfair, 2018). We accept the payment methods
+          shown at checkout.
+        </p>
+      ),
+    },
+    {
+      id: 'risk-of-loss',
+      number: 4,
+      title: 'Risk of Loss and Title Transfer',
+      body: (
+        <p>
+          Title and risk of loss for products pass to the buyer when the carrier picks them up at our facilities (FOB
+          Origin), unless agreed otherwise in writing.
+        </p>
+      ),
+    },
+    {
+      id: 'product-descriptions',
+      number: 5,
+      title: 'Product Descriptions',
+      body: (
+        <p>
+          We make reasonable efforts to ensure descriptions, images, specifications, and compatibility are accurate. We
+          do not warrant they are accurate, complete, or error-free. Images are illustrative. Technical specifications
+          are subject to change by the manufacturer without notice.
+        </p>
+      ),
+    },
+    {
+      id: 'license',
+      number: 6,
+      title: 'Limited License to Use the Site',
+      body: (
+        <p>
+          We grant you a limited, non-exclusive, non-transferable, revocable license to access and use the Site for
+          legitimate personal or business purposes. Prohibited: copy, modify, decompile, scrape, automated access,
+          resale, or commercial exploitation of the content without written authorization.
+        </p>
+      ),
+    },
+    {
+      id: 'ip',
+      number: 7,
+      title: 'Intellectual Property',
+      body: (
+        <p>
+          All Site content (text, code, design, trademarks, logos, images, and compilation) is owned by Havtel Corp or
+          its licensors and is protected by copyright and trademark laws. Third-party trademarks belong to their
+          respective owners.
+        </p>
+      ),
+    },
+    {
+      id: 'user-content',
+      number: 8,
+      title: 'User Content',
+      body: (
+        <p>
+          If you post reviews, comments, or any content (&quot;User Content&quot;), you grant us a worldwide, perpetual,
+          royalty-free, sublicensable license to use it for commercial purposes. You represent that you own the relevant
+          rights. We reserve the right to moderate, remove, or reject User Content.
+        </p>
+      ),
+    },
+    {
+      id: 'prohibited-uses',
+      number: 9,
+      title: 'Prohibited Uses',
+      body: (
+        <p>
+          You shall not: (a) use the Site for unlawful activity; (b) impersonate another person; (c) interfere with Site
+          security or functionality; (d) collect data on other users; (e) resell products without written authorization
+          in violation of the Distribution Agreement; (f) re-export products to controlled destinations without complying
+          with applicable EAR/OFAC regulations.
+        </p>
+      ),
+    },
+    {
+      id: 'third-party-links',
+      number: 10,
+      title: 'Third-Party Links',
+      body: (
+        <p>
+          The Site may contain links to third-party sites. We do not control or endorse their content. Use is at your
+          own risk and governed by such third parties&apos; terms.
+        </p>
+      ),
+    },
+    {
+      id: 'warranty-disclaimers',
+      number: 11,
+      title: 'Warranty Disclaimers',
+      body: (
+        <p className="uppercase tracking-[0.02em]">
+          The Site and products are provided &quot;as is&quot; and &quot;as available&quot;. To the maximum extent
+          permitted by law, we disclaim all warranties express or implied, including merchantability, fitness for a
+          particular purpose, and non-infringement. Manufacturers&apos; warranties, when applicable, are provided
+          separately and are not altered by these Terms.
+        </p>
+      ),
+    },
+    {
+      id: 'limitation-liability',
+      number: 12,
+      title: 'Limitation of Liability',
+      body: (
+        <p className="uppercase tracking-[0.02em]">
+          To the maximum extent permitted by law, our aggregate liability for any claim related to these Terms, the Site,
+          or the products shall not exceed the amount paid by you in the twelve (12) months prior to the event giving
+          rise to the claim. In no event shall we be liable for indirect, incidental, special, consequential, exemplary,
+          or punitive damages, including lost profits, data, or reputation.
+        </p>
+      ),
+    },
+    {
+      id: 'indemnification',
+      number: 13,
+      title: 'Indemnification',
+      body: (
+        <p>
+          You agree to indemnify and hold harmless Havtel Corp, its directors, employees, and affiliates from any claim,
+          damage, or expense (including reasonable attorneys&apos; fees) arising from your use of the Site, your breach
+          of these Terms, or your violation of third-party rights.
+        </p>
+      ),
+    },
+    {
+      id: 'force-majeure',
+      number: 14,
+      title: 'Force Majeure',
+      body: (
+        <p>
+          We shall not be liable for failure due to causes beyond our reasonable control: acts of God, war, terrorism,
+          pandemic, civil unrest, carrier failures, government regulation, or widespread telecommunications failure.
+        </p>
+      ),
+    },
+    {
+      id: 'arbitration',
+      number: 15,
+      title: 'Dispute Resolution — Arbitration and Class Action Waiver',
+      body: (
+        <>
+          <p className="font-bold uppercase tracking-[0.02em] text-[#1f6dad]">
+            Read this section carefully. It affects your legal rights.
+          </p>
+          <p>
+            Any dispute between you and Havtel Corp shall be resolved exclusively by binding <strong>INDIVIDUAL ARBITRATION</strong> administered
+            by the American Arbitration Association (AAA) under its Consumer Arbitration Rules, in the State of Florida.
+            <strong> You expressly waive your right to a jury trial and to participate in a class action, group action, or class arbitration.</strong>
+          </p>
+          <p>
+            <strong>Exceptions:</strong> claims under USD $10,000 may be brought in small claims court; intellectual property claims may be
+            litigated in federal courts. You may opt out of arbitration by sending written notice to{' '}
+            <a href="mailto:sales@nitrotelmanufacturing.com">sales@nitrotelmanufacturing.com</a> within 30 days of accepting these Terms.
+          </p>
+        </>
+      ),
+    },
+    {
+      id: 'governing-law',
+      number: 16,
+      title: 'Governing Law and Jurisdiction',
+      body: (
+        <p>
+          These Terms are governed by the laws of the State of Florida and applicable U.S. federal law, without regard
+          to conflict of laws rules. The U.N. Convention on Contracts for the International Sale of Goods (CISG) is
+          expressly excluded.
+        </p>
+      ),
+    },
+    {
+      id: 'modifications',
+      number: 17,
+      title: 'Modifications',
+      body: (
+        <p>
+          We may modify these Terms at any time. Material modifications will be notified by prominent notice on the
+          Site or by email at least thirty (30) days prior to the effective date. Continued use after the effective
+          date constitutes acceptance.
+        </p>
+      ),
+    },
+    {
+      id: 'severability',
+      number: 18,
+      title: 'Severability and Entire Agreement',
+      body: (
+        <p>
+          If any provision is deemed invalid, the remainder remain in full force. These Terms, together with the
+          referenced policies, constitute the entire agreement between the parties and supersede any prior agreement.
+        </p>
+      ),
+    },
+    {
+      id: 'contact',
+      number: 19,
+      title: 'Contact',
+      body: (
+        <p>
+          Havtel Corp<br />
+          4626 SW 147th Ct, Miami, FL 33185<br />
+          <a href="mailto:sales@nitrotelmanufacturing.com">sales@nitrotelmanufacturing.com</a> · (786) 409-3741
+        </p>
+      ),
+    },
+  ];
+
+  return (
+    <LegalDocumentLayout
+      eyebrow="Legal Document"
+      title="Terms of Use"
+      intro="The terms governing your use of www.nitrotelmanufacturing.com — including orders, payment, intellectual property, dispute resolution, and limitations of liability."
+      effectiveDate="May 1, 2026"
+      sections={sections}
+    />
+  );
+}
 
 function Support() {
   return (

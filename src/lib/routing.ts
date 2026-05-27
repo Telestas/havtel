@@ -1,7 +1,8 @@
 export type View =
   | 'home' | 'shop' | 'support' | 'account' | 'orders'
   | 'cart' | 'shipping' | 'payment' | 'confirmed'
-  | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot';
+  | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot'
+  | 'privacy' | 'terms';
 
 export type RouteSnapshot = {
   view: View;
@@ -43,6 +44,8 @@ export const getRouteSnapshotFromPath = (pathname: string): RouteSnapshot => {
     case '/login':               return { view: 'login',     productSlug: null, trackedOrderId: null };
     case '/signup':              return { view: 'signup',    productSlug: null, trackedOrderId: null };
     case '/forgot-password':     return { view: 'forgot',    productSlug: null, trackedOrderId: null };
+    case '/privacy-policy':      return { view: 'privacy',   productSlug: null, trackedOrderId: null };
+    case '/terms-of-use':        return { view: 'terms',     productSlug: null, trackedOrderId: null };
     case '/404':                 return { view: 'notfound',  productSlug: null, trackedOrderId: null };
     default:                     return { view: 'notfound',  productSlug: null, trackedOrderId: null };
   }
@@ -62,6 +65,8 @@ export const buildPathFromRoute = ({ view, productSlug, trackedOrderId }: RouteS
     case 'login':     return '/login';
     case 'signup':    return '/signup';
     case 'forgot':    return '/forgot-password';
+    case 'privacy':   return '/privacy-policy';
+    case 'terms':     return '/terms-of-use';
     case 'notfound':  return '/404';
     case 'tracking':  return trackedOrderId ? `/tracking/${encodeURIComponent(trackedOrderId)}` : '/tracking';
     case 'product':   return productSlug ? `/product/${encodeURIComponent(productSlug)}` : '/store';
