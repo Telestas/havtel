@@ -1,7 +1,7 @@
 export type View =
   | 'home' | 'shop' | 'support' | 'account' | 'orders'
   | 'cart' | 'shipping' | 'payment' | 'confirmed'
-  | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot'
+  | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot' | 'reset'
   | 'privacy' | 'terms';
 
 export type RouteSnapshot = {
@@ -44,6 +44,7 @@ export const getRouteSnapshotFromPath = (pathname: string): RouteSnapshot => {
     case '/login':               return { view: 'login',     productSlug: null, trackedOrderId: null };
     case '/signup':              return { view: 'signup',    productSlug: null, trackedOrderId: null };
     case '/forgot-password':     return { view: 'forgot',    productSlug: null, trackedOrderId: null };
+    case '/reset-password':      return { view: 'reset',     productSlug: null, trackedOrderId: null };
     case '/privacy-policy':      return { view: 'privacy',   productSlug: null, trackedOrderId: null };
     case '/terms-of-use':        return { view: 'terms',     productSlug: null, trackedOrderId: null };
     case '/404':                 return { view: 'notfound',  productSlug: null, trackedOrderId: null };
@@ -65,6 +66,7 @@ export const buildPathFromRoute = ({ view, productSlug, trackedOrderId }: RouteS
     case 'login':     return '/login';
     case 'signup':    return '/signup';
     case 'forgot':    return '/forgot-password';
+    case 'reset':     return '/reset-password';
     case 'privacy':   return '/privacy-policy';
     case 'terms':     return '/terms-of-use';
     case 'notfound':  return '/404';

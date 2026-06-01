@@ -57,6 +57,7 @@ import {
   Download,
   LogOut,
   Send,
+  LoaderCircle,
   type LucideIcon,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -84,6 +85,8 @@ import {
   loginRequest,
   refreshTokenRequest,
   registerRequest,
+  forgotPasswordRequest,
+  resetPasswordRequest,
   removeCartItemRequest,
   setDefaultUserAddressRequest,
   updateCartItemRequest,
@@ -100,7 +103,7 @@ import {
   type Reservation,
 } from './lib/api';
 
-type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot' | 'preorder' | 'privacy' | 'terms';
+type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot' | 'reset' | 'preorder' | 'privacy' | 'terms';
 
 const PAGE_META: Partial<Record<View, { title: string; description: string }>> = {
   home:     { title: 'Havtel',    description: 'Premium tech hardware — servers, networking gear, and more.' },
@@ -799,17 +802,32 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const redirectStatus = params.get('redirect_status');
-    const hasStripeParams = params.has('payment_intent_client_secret');
+    // Stripe appends different param keys depending on the integration:
+    //  - Payment Intents flow: `payment_intent` + `payment_intent_client_secret`
+    //  - Checkout Sessions (ui_mode='elements'): `session_id`
+    //  - Sometimes no params at all, just landing on the return URL.
+    // If we have a pending order id stashed before redirect AND we land on
+    // /checkout/confirmed, treat it as the post-payment return regardless of
+    // which param shape Stripe used.
+    const pendingOrderId = sessionStorage.getItem('havtel.stripe.pending_order_id');
+    const onConfirmedPath = window.location.pathname === '/checkout/confirmed';
+    const hasStripeParams =
+      params.has('payment_intent_client_secret') ||
+      params.has('session_id') ||
+      (onConfirmedPath && !!pendingOrderId);
 
     if (!hasStripeParams) return;
 
     // Strip Stripe params from URL so they don't persist on refresh
     window.history.replaceState({}, '', window.location.pathname);
 
-    const pendingOrderId = sessionStorage.getItem('havtel.stripe.pending_order_id');
     sessionStorage.removeItem('havtel.stripe.pending_order_id');
 
-    if (redirectStatus === 'succeeded') {
+    // `redirect_status` is only present on the Payment Intents flow. For
+    // Checkout Sessions we assume success since failures keep the user on the
+    // payment page rather than redirecting.
+    const succeeded = redirectStatus === 'succeeded' || redirectStatus === null;
+    if (succeeded) {
       setStripeReturnOrderId(pendingOrderId);
       setView('confirmed');
     } else {
@@ -836,6 +854,27 @@ export default function App() {
       setCartItems([]);
     })();
   }, [stripeReturnOrderId, authSession?.access_token]);
+
+  // Poll the order while we're on the confirmed view and the payment webhook
+  // hasn't moved the status past `confirmed` yet, so the UI flips to the
+  // "Order Confirmed" copy as soon as the backend records the payment.
+  useEffect(() => {
+    if (view !== 'confirmed') return;
+    if (!authSession?.access_token || !latestOrder) return;
+    if (latestOrder.status !== 'confirmed') return;
+
+    const orderId = latestOrder.id;
+    const token = authSession.access_token;
+    const interval = setInterval(async () => {
+      try {
+        const next = await getOrderRequest(token, orderId);
+        setLatestOrder(next);
+      } catch {
+        // ignore transient errors; we'll try again on the next tick
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [view, authSession?.access_token, latestOrder?.id, latestOrder?.status]);
 
   const requireAuthForView = (nextView: View) => {
     if (isAuthenticated) {
@@ -1262,6 +1301,17 @@ export default function App() {
             onSubmit={() => setView('login')}
             onGoHome={() => setView('home')}
             onGoToLogin={() => setView('login')}
+          />
+        ) : view === 'reset' ? (
+          <AuthResetView
+            key="reset"
+            onGoHome={() => setView('home')}
+            onGoToLogin={() => setView('login')}
+            onResetSuccess={() => {
+              setNotification('Password updated. Please sign in with your new password.');
+              setTimeout(() => setNotification(null), 5000);
+              setView('login');
+            }}
           />
         ) : view === 'privacy' ? (
           <PrivacyPolicy key="privacy" />
@@ -2628,16 +2678,25 @@ function StripePaymentForm({ total, onPaymentSuccess }: { total: number; onPayme
     setIsSubmitting(true);
     setStripeError(null);
 
-    const result = await checkoutState.checkout.confirm();
+    try {
+      const result = await checkoutState.checkout.confirm();
 
-    if (result.type === 'error') {
-      setStripeError(result.error.message ?? 'Payment failed. Please try again.');
+      if (result.type === 'error') {
+        setStripeError(result.error.message ?? 'Payment failed. Please try again.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      await onPaymentSuccess();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unexpected payment error';
+      setStripeError(message);
+      // Surface the raw error in the console so the integration can be diagnosed.
+      // eslint-disable-next-line no-console
+      console.error('[stripe confirm] threw:', err);
+    } finally {
       setIsSubmitting(false);
-      return;
     }
-
-    await onPaymentSuccess();
-    setIsSubmitting(false);
   };
 
   if (checkoutState.type === 'loading') {
@@ -2874,16 +2933,18 @@ function OrderConfirmedView({
   key?: string;
 }) {
   const shippingCost = Number(order?.shipping_amount ?? (shippingMethod === 'priority' ? 12 : 35));
-  const subtotal = Number(order?.subtotal_amount ?? cartItems.reduce((sum, item) => {
-    const product = PRODUCTS.find((entry) => entry.id === item.productId);
-    return sum + (product?.price ?? 0) * item.quantity;
-  }, 0));
+  const subtotal = Number(order?.subtotal_amount ?? 0);
   const tax = Number(order?.tax_amount ?? subtotal * 0.08);
   const total = Number(order?.total_amount ?? subtotal + shippingCost + tax);
   const shippingName = order?.shipping_address.contact_name
     ?? [checkoutShippingAddress?.firstName, checkoutShippingAddress?.lastName].filter(Boolean).join(' ').trim();
   const orderItems = order?.items ?? [];
   const orderShippingMethod = order?.shipping_method ?? shippingMethod;
+  // While the order is still `confirmed`, the payment webhook has not yet
+  // reached the backend — show "awaiting confirmation" copy instead of the
+  // success message. Once the webhook moves the order to `processing` (or any
+  // later state) we switch to the regular confirmation view.
+  const isAwaitingPaymentConfirmation = order?.status === 'confirmed';
 
   return (
     <motion.div
@@ -2903,14 +2964,20 @@ function OrderConfirmedView({
           <section className="pt-8">
             <div className="mb-10 flex h-28 w-28 items-center justify-center rounded-full bg-[#deeef7] shadow-[0_0_40px_rgba(31,109,173,0.15)]">
               <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] text-white shadow-[0_8px_20px_rgba(13,77,138,0.3)]">
-                <Check size={32} />
+                {isAwaitingPaymentConfirmation ? <LoaderCircle size={32} className="animate-spin" /> : <Check size={32} />}
               </div>
             </div>
 
-            <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.14em] text-[#5c95bd]">Purchase Complete</span>
-            <h1 className="text-5xl font-black uppercase tracking-[-0.08em] text-[#1f6dad] md:text-7xl md:leading-none">Order Confirmed.</h1>
+            <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.14em] text-[#5c95bd]">
+              {isAwaitingPaymentConfirmation ? 'Order Placed' : 'Purchase Complete'}
+            </span>
+            <h1 className="text-5xl font-black uppercase tracking-[-0.08em] text-[#1f6dad] md:text-7xl md:leading-none">
+              {isAwaitingPaymentConfirmation ? 'Awaiting confirmation.' : 'Order Confirmed.'}
+            </h1>
             <p className="mt-6 max-w-3xl text-[20px] italic leading-relaxed text-[#5d95bc]">
-              Your high-performance setup is now in the queue. We've sent a detailed receipt to your registered email address.
+              {isAwaitingPaymentConfirmation
+                ? "Your order is registered and we're waiting for the payment processor to confirm it. You'll receive a receipt by email once the payment is verified — usually within a few seconds."
+                : "Your high-performance setup is now in the queue. We've sent a detailed receipt to your registered email address."}
             </p>
 
             <div className="mt-10 flex flex-col gap-4 sm:flex-row">
@@ -3621,53 +3688,40 @@ function ProductDetailView({
             </div>
           </div>
 
-          <div className="mt-10 grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,1fr)_420px]">
-            <div>
-              {effectiveTab === 'description' && (
-                <p className="max-w-4xl text-[18px] leading-[1.8] text-[#5d95bc] whitespace-pre-wrap">
-                  {longDescription ?? productDescription}
-                </p>
-              )}
+          <div className="mt-10">
+            {effectiveTab === 'description' && (
+              <p className="max-w-4xl text-[18px] leading-[1.8] text-[#5d95bc] whitespace-pre-wrap">
+                {longDescription ?? productDescription}
+              </p>
+            )}
 
-              {effectiveTab === 'specs' && (
-                <>
-                  <h2 className="text-4xl font-black tracking-[-0.06em] text-[#1f6dad] md:text-[58px]">Technical Specifications</h2>
-                  <div className="mt-8 grid grid-cols-1 gap-y-4 sm:grid-cols-2">
-                    {specifications.map(([label, value]) => (
-                      <div key={label} className="flex items-center justify-between gap-6 border-b border-[#b9d4e7] py-4 sm:pr-8">
-                        <span className="text-sm font-black uppercase tracking-[0.08em] text-[#5d95bc]">{label}</span>
-                        <span className="text-sm font-black text-[#1f6dad]">{value}</span>
-                      </div>
-                    ))}
-                  </div>
-                  {specPdfEnabled && specPdfUrl && (
-                    <div className="mt-8">
-                      <a
-                        href={specPdfUrl}
-                        download={specPdfFilename || 'specifications.pdf'}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-3 rounded-[14px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-7 py-4 text-sm font-black uppercase tracking-[0.14em] text-white shadow-[0_14px_30px_rgba(13,77,138,0.24)] transition-transform hover:scale-[1.01]"
-                      >
-                        <Download size={18} />
-                        Download Specifications
-                      </a>
+            {effectiveTab === 'specs' && (
+              <>
+                <h2 className="text-4xl font-black tracking-[-0.06em] text-[#1f6dad] md:text-[58px]">Technical Specifications</h2>
+                <div className="mt-8 flex flex-col gap-y-4">
+                  {specifications.map(([label, value]) => (
+                    <div key={label} className="flex items-center justify-between gap-6 border-b border-[#b9d4e7] py-4">
+                      <span className="text-sm font-black uppercase tracking-[0.08em] text-[#5d95bc]">{label}</span>
+                      <span className="text-sm font-black text-[#1f6dad]">{value}</span>
                     </div>
-                  )}
-                </>
-              )}
-
-            </div>
-
-            <div className="space-y-5">
-              {effectiveTab === 'description' && specifications.length > 0 &&
-                specifications.map(([label, value]) => (
-                  <div key={label} className="flex items-center justify-between gap-6 border-b border-[#b9d4e7] py-3">
-                    <span className="text-sm font-black uppercase tracking-[0.08em] text-[#5d95bc]">{label}</span>
-                    <span className="text-sm font-black text-[#1f6dad]">{value}</span>
+                  ))}
+                </div>
+                {specPdfEnabled && specPdfUrl && (
+                  <div className="mt-8">
+                    <a
+                      href={specPdfUrl}
+                      download={specPdfFilename || 'specifications.pdf'}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-3 rounded-[14px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-7 py-4 text-sm font-black uppercase tracking-[0.14em] text-white shadow-[0_14px_30px_rgba(13,77,138,0.24)] transition-transform hover:scale-[1.01]"
+                    >
+                      <Download size={18} />
+                      Download Specifications
+                    </a>
                   </div>
-                ))}
-            </div>
+                )}
+              </>
+            )}
           </div>
 
           <section className="mt-20">
@@ -4197,15 +4251,38 @@ function AuthSignupView({
 }
 
 function AuthForgotView({
-  onSubmit,
   onGoHome,
   onGoToLogin,
 }: {
-  onSubmit: () => void;
+  onSubmit?: () => void;
   onGoHome: () => void;
   onGoToLogin: () => void;
   key?: string;
 }) {
+  const [email, setEmail] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  // The success message is intentionally generic and shown for any submission
+  // (valid email or not), so we never reveal which addresses are registered.
+  const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await forgotPasswordRequest(email.trim());
+      setSubmittedMessage(
+        "If an account exists for that address, we've sent password reset instructions. The link expires in 30 minutes.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not request a reset link right now.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pt-20 min-h-screen bg-[#0f141b]">
       <section className="relative overflow-hidden px-8 py-20 md:px-16">
@@ -4217,21 +4294,154 @@ function AuthForgotView({
           <p className="mt-5 text-xl leading-relaxed text-slate-400">
             Enter your email address and we'll send recovery instructions to restore access to your Havtel account.
           </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              onSubmit();
-            }}
-            className="mt-8 space-y-6"
-          >
-            <label className="block">
-              <span className="mb-4 block text-sm font-bold uppercase tracking-[0.24em] text-slate-300">Email Address</span>
-              <input type="email" required placeholder="name@domain.tech" className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40" />
-            </label>
-            <button type="submit" className="w-full rounded-[22px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-5 text-xl font-bold text-[#03192f] shadow-[0_24px_60px_rgba(77,147,247,0.35)]">
-              Send Reset Link
-            </button>
-          </form>
+
+          {submittedMessage ? (
+            <div className="mt-8 rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-6 py-5 text-base text-emerald-200">
+              {submittedMessage}
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="mt-8 space-y-6">
+              <label className="block">
+                <span className="mb-4 block text-sm font-bold uppercase tracking-[0.24em] text-slate-300">Email Address</span>
+                <input
+                  type="email"
+                  required
+                  placeholder="name@domain.tech"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40"
+                />
+              </label>
+              {error && (
+                <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-5 py-3 text-sm text-red-200">{error}</div>
+              )}
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full rounded-[22px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-5 text-xl font-bold text-[#03192f] shadow-[0_24px_60px_rgba(77,147,247,0.35)] disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isSubmitting ? 'Sending…' : 'Send Reset Link'}
+              </button>
+            </form>
+          )}
+
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <button type="button" onClick={onGoToLogin} className="text-sm font-bold text-[#b9d1ff] hover:text-white">Back to Login</button>
+            <button type="button" onClick={onGoHome} className="text-sm font-bold text-slate-400 hover:text-white">Return Home</button>
+          </div>
+        </div>
+      </section>
+    </motion.div>
+  );
+}
+
+function AuthResetView({
+  onGoHome,
+  onGoToLogin,
+  onResetSuccess,
+}: {
+  onGoHome: () => void;
+  onGoToLogin: () => void;
+  onResetSuccess: () => void;
+  key?: string;
+}) {
+  // The reset token comes in via the URL the email link points to:
+  //   /reset-password?token=<token>
+  // We read it once on mount and keep it in component state so the URL can be
+  // cleaned up immediately afterwards.
+  const initialToken = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    return new URLSearchParams(window.location.search).get('token') ?? '';
+  }, []);
+
+  const [token] = useState(initialToken);
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const hasToken = token.length > 0;
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (isSubmitting) return;
+
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters long.');
+      return;
+    }
+    if (password !== confirm) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await resetPasswordRequest(token, password);
+      onResetSuccess();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reset your password right now.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pt-20 min-h-screen bg-[#0f141b]">
+      <section className="relative overflow-hidden px-8 py-20 md:px-16">
+        <div className="absolute inset-0">
+          <div className="absolute left-[10%] top-[18%] h-[300px] w-[300px] rounded-full bg-[#aac7ff]/10 blur-[120px]"></div>
+        </div>
+        <div className="relative z-10 mx-auto max-w-3xl rounded-[32px] border border-white/5 bg-[#1b2129] p-8 shadow-[0_30px_80px_rgba(0,0,0,0.3)] md:p-10">
+          <h1 className="text-5xl font-black tracking-tighter text-slate-100">Choose a new password</h1>
+          <p className="mt-5 text-xl leading-relaxed text-slate-400">
+            Enter a new password to regain access to your Havtel account. All your active sessions will be signed out for security.
+          </p>
+
+          {!hasToken ? (
+            <div className="mt-8 rounded-2xl border border-red-400/30 bg-red-500/10 px-6 py-5 text-base text-red-200">
+              This reset link is missing its token. Open the most recent email you received and click the button there again.
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="mt-8 space-y-6">
+              <label className="block">
+                <span className="mb-4 block text-sm font-bold uppercase tracking-[0.24em] text-slate-300">New Password</span>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  placeholder="At least 8 characters"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-4 block text-sm font-bold uppercase tracking-[0.24em] text-slate-300">Confirm Password</span>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  placeholder="Re-enter the same password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  className="w-full rounded-2xl border border-white/5 bg-[#0b1016] px-6 py-5 text-xl text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#aac7ff]/40"
+                />
+              </label>
+              {error && (
+                <div className="rounded-2xl border border-red-400/30 bg-red-500/10 px-5 py-3 text-sm text-red-200">{error}</div>
+              )}
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full rounded-[22px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-8 py-5 text-xl font-bold text-[#03192f] shadow-[0_24px_60px_rgba(77,147,247,0.35)] disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isSubmitting ? 'Updating…' : 'Update Password'}
+              </button>
+            </form>
+          )}
+
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <button type="button" onClick={onGoToLogin} className="text-sm font-bold text-[#b9d1ff] hover:text-white">Back to Login</button>
             <button type="button" onClick={onGoHome} className="text-sm font-bold text-slate-400 hover:text-white">Return Home</button>

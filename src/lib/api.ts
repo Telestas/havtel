@@ -171,6 +171,20 @@ export async function registerRequest(payload: {
   });
 }
 
+export async function forgotPasswordRequest(email: string): Promise<void> {
+  return apiRequest<void>('/api/v1/auth/forgot-password', {
+    method: 'POST',
+    body: { email },
+  });
+}
+
+export async function resetPasswordRequest(token: string, newPassword: string): Promise<void> {
+  return apiRequest<void>('/api/v1/auth/reset-password', {
+    method: 'POST',
+    body: { token, new_password: newPassword },
+  });
+}
+
 export async function getCurrentUserRequest(token: string): Promise<AuthUser> {
   return apiRequest<AuthUser>('/api/v1/users/me', {
     method: 'GET',
