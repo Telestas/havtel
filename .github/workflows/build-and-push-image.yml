@@ -58,6 +58,14 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs: [test]
+    # The frontend bakes its API base URL and Stripe publishable key at build
+    # time, so a single image only works for one environment. We run the build
+    # twice — once per env — using a matrix so each environment gets its own
+    # image tagged with an `{env}-` prefix.
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, prod]
 
     steps:
       - name: Checkout
@@ -85,31 +93,54 @@ jobs:
         if: github.ref_type == 'tag'
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
 
-      - name: Validate frontend build configuration
+      - name: Resolve env-specific build vars
+        id: vars
         env:
-          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
-          VITE_STRIPE_PUBLISHABLE_KEY: ${{ vars.VITE_STRIPE_PUBLISHABLE_KEY }}
+          MATRIX_ENV: ${{ matrix.env }}
+          VITE_API_BASE_URL_DEV: ${{ vars.VITE_API_BASE_URL_DEV }}
+          VITE_API_BASE_URL_PROD: ${{ vars.VITE_API_BASE_URL_PROD }}
+          VITE_STRIPE_PUBLISHABLE_KEY_DEV: ${{ vars.VITE_STRIPE_PUBLISHABLE_KEY_DEV }}
+          VITE_STRIPE_PUBLISHABLE_KEY_PROD: ${{ vars.VITE_STRIPE_PUBLISHABLE_KEY_PROD }}
         run: |
-          if [ -z "$VITE_API_BASE_URL" ]; then
-            echo "VITE_API_BASE_URL is empty or not configured in repository variables."
+          if [ "$MATRIX_ENV" = "dev" ]; then
+            API_BASE_URL="$VITE_API_BASE_URL_DEV"
+            STRIPE_KEY="$VITE_STRIPE_PUBLISHABLE_KEY_DEV"
+          else
+            API_BASE_URL="$VITE_API_BASE_URL_PROD"
+            STRIPE_KEY="$VITE_STRIPE_PUBLISHABLE_KEY_PROD"
+          fi
+
+          if [ -z "$API_BASE_URL" ]; then
+            echo "VITE_API_BASE_URL_${MATRIX_ENV^^} is empty or not configured in repository variables."
             exit 1
           fi
-          if [ -z "$VITE_STRIPE_PUBLISHABLE_KEY" ]; then
-            echo "VITE_STRIPE_PUBLISHABLE_KEY is empty or not configured in repository variables."
+          if [ -z "$STRIPE_KEY" ]; then
+            echo "VITE_STRIPE_PUBLISHABLE_KEY_${MATRIX_ENV^^} is empty or not configured in repository variables."
             exit 1
           fi
+
+          # Mask the publishable key in logs even though it's a public key —
+          # cleaner output and prevents accidental copy-paste.
+          echo "::add-mask::$STRIPE_KEY"
+          echo "api_base_url=$API_BASE_URL" >> "$GITHUB_OUTPUT"
+          echo "stripe_key=$STRIPE_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Compute image names
         env:
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
+          MATRIX_ENV: ${{ matrix.env }}
         run: |
           echo "IMAGE_NAME=ghcr.io/${REPO_OWNER,,}/${REPO_NAME,,}" >> "$GITHUB_ENV"
           echo "PACKAGE_NAME=${REPO_NAME,,}" >> "$GITHUB_ENV"
+
+          # Channel = floating tag that always points to the latest build for
+          # this env. Semver tags are env-prefixed so dev/prod don't collide.
+          echo "CHANNEL_TAG=${MATRIX_ENV}-latest" >> "$GITHUB_ENV"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "KEEP_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+            echo "VERSION_TAG=${MATRIX_ENV}-${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
           else
-            echo "KEEP_TAG=main" >> "$GITHUB_ENV"
+            echo "VERSION_TAG=${MATRIX_ENV}-main" >> "$GITHUB_ENV"
           fi
 
       - name: Log in to GHCR
@@ -129,22 +160,25 @@ jobs:
           context: .
           push: true
           build-args: |
-            VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL }}
-            VITE_STRIPE_PUBLISHABLE_KEY=${{ vars.VITE_STRIPE_PUBLISHABLE_KEY }}
+            VITE_API_BASE_URL=${{ steps.vars.outputs.api_base_url }}
+            VITE_STRIPE_PUBLISHABLE_KEY=${{ steps.vars.outputs.stripe_key }}
           tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ env.KEEP_TAG }}
+            ${{ env.IMAGE_NAME }}:${{ env.CHANNEL_TAG }}
+            ${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}
 
-      - name: Delete previous container versions
+      - name: Delete previous container versions for this env
         uses: actions/github-script@v8
         env:
           PACKAGE_NAME: ${{ env.PACKAGE_NAME }}
-          KEEP_TAG: ${{ env.KEEP_TAG }}
+          MATRIX_ENV: ${{ matrix.env }}
+          VERSION_TAG: ${{ env.VERSION_TAG }}
+          CHANNEL_TAG: ${{ env.CHANNEL_TAG }}
         with:
           script: |
             const owner = context.repo.owner;
             const packageName = process.env.PACKAGE_NAME;
-            const keepTag = process.env.KEEP_TAG;
+            const envPrefix = `${process.env.MATRIX_ENV}-`;
+            const keepTags = new Set([process.env.VERSION_TAG, process.env.CHANNEL_TAG]);
             const packageType = "container";
             const ownerType = context.payload.repository.owner.type;
 
@@ -180,19 +214,20 @@ jobs:
                 tags: version.metadata?.container?.tags ?? [],
               }))
               .filter((version) => version.tags.length > 0)
+              // Only manage versions belonging to THIS env so dev runs don't
+              // delete prod versions and vice versa.
+              .filter((version) => version.tags.some((t) => t.startsWith(envPrefix)))
               .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-            let keptTaggedVersion = false;
             for (const version of taggedVersions) {
-              const shouldKeep = version.tags.includes(keepTag) && !keptTaggedVersion;
+              const shouldKeep = version.tags.some((t) => keepTags.has(t));
 
               if (shouldKeep) {
-                keptTaggedVersion = true;
-                core.info(`Keeping package version ${version.id} with tags: ${version.tags.join(", ")}`);
+                core.info(`Keeping ${envPrefix}* version ${version.id} with tags: ${version.tags.join(", ")}`);
                 continue;
               }
 
-              core.info(`Deleting old tagged package version ${version.id} with tags: ${version.tags.join(", ")}`);
+              core.info(`Deleting old ${envPrefix}* version ${version.id} with tags: ${version.tags.join(", ")}`);
               await deleteVersion({
                 ...baseParams,
                 package_version_id: version.id,
@@ -207,12 +242,13 @@ jobs:
           TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}
           REPO_NAME: ${{ github.event.repository.name }}
           REF_NAME: ${{ github.ref_name }}
+          MATRIX_ENV: ${{ matrix.env }}
         run: |
           [ -z "${TELEGRAM_BOT_TOKEN:-}" ] && exit 0
           CURL_ARGS=(
             --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}"
             --data-urlencode "parse_mode=HTML"
-            --data-urlencode "text=✅ <b>${REPO_NAME}</b> <code>${REF_NAME}</code> — imagen publicada"
+            --data-urlencode "text=✅ <b>${REPO_NAME}</b> <code>${MATRIX_ENV}-${REF_NAME}</code> — imagen publicada"
           )
           [ -n "${TELEGRAM_THREAD_ID:-}" ] && CURL_ARGS+=(--data-urlencode "message_thread_id=${TELEGRAM_THREAD_ID}")
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" "${CURL_ARGS[@]}"
@@ -225,13 +261,14 @@ jobs:
           TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}
           REPO_NAME: ${{ github.event.repository.name }}
           REF_NAME: ${{ github.ref_name }}
+          MATRIX_ENV: ${{ matrix.env }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           [ -z "${TELEGRAM_BOT_TOKEN:-}" ] && exit 0
           CURL_ARGS=(
             --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}"
             --data-urlencode "parse_mode=HTML"
-            --data-urlencode "text=❌ <b>${REPO_NAME}</b> <code>${REF_NAME}</code> — build fallido | <a href=\"${RUN_URL}\">Ver run</a>"
+            --data-urlencode "text=❌ <b>${REPO_NAME}</b> <code>${MATRIX_ENV}-${REF_NAME}</code> — build fallido | <a href=\"${RUN_URL}\">Ver run</a>"
           )
           [ -n "${TELEGRAM_THREAD_ID:-}" ] && CURL_ARGS+=(--data-urlencode "message_thread_id=${TELEGRAM_THREAD_ID}")
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" "${CURL_ARGS[@]}"
