@@ -78,6 +78,8 @@ import {
   getOrderRequest,
   getProductRequest,
   getCurrentUserRequest,
+  getTaxConfigRequest,
+  validateTaxExemptionRequest,
   listCategoriesRequest,
   listOrdersRequest,
   listProductsRequest,
@@ -484,6 +486,11 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [shippingMethod, setShippingMethod] = useState<'priority' | 'express'>('priority');
+  const [taxRatePercent, setTaxRatePercent] = useState<number>(7);
+  const [taxExemptionInput, setTaxExemptionInput] = useState('');
+  const [appliedExemption, setAppliedExemption] = useState<{ code: string; holder: string | null } | null>(null);
+  const [exemptionError, setExemptionError] = useState<string | null>(null);
+  const [isValidatingExemption, setIsValidatingExemption] = useState(false);
   const [deliveryType, setDeliveryType] = useState<'home_delivery' | 'warehouse_pickup'>('home_delivery');
   const [selectedPickupPointId, setSelectedPickupPointId] = useState<string | null>(null);
   const [checkoutShippingAddress, setCheckoutShippingAddress] = useState<CheckoutShippingAddress | null>(null);
@@ -638,6 +645,20 @@ export default function App() {
       clearInterval(interval);
       window.removeEventListener('app:maintenance', handleMaintenance);
     };
+  }, []);
+
+  useEffect(() => {
+    // Load the configured sales-tax rate (falls back to the default on failure).
+    let cancelled = false;
+    void (async () => {
+      try {
+        const cfg = await getTaxConfigRequest();
+        if (!cancelled && typeof cfg.tax_rate === 'number') setTaxRatePercent(cfg.tax_rate);
+      } catch {
+        // keep default
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -1045,6 +1066,36 @@ export default function App() {
     }
   };
 
+  const effectiveTaxRate = appliedExemption ? 0 : taxRatePercent / 100;
+
+  const handleApplyExemption = async () => {
+    const code = taxExemptionInput.trim();
+    if (!code) return;
+    setIsValidatingExemption(true);
+    setExemptionError(null);
+    try {
+      const result = await validateTaxExemptionRequest(code);
+      if (result.valid) {
+        setAppliedExemption({ code, holder: result.holder_name });
+        setExemptionError(null);
+      } else {
+        setAppliedExemption(null);
+        setExemptionError('Invalid or inactive exemption code.');
+      }
+    } catch {
+      setAppliedExemption(null);
+      setExemptionError('Could not validate the code. Please try again.');
+    } finally {
+      setIsValidatingExemption(false);
+    }
+  };
+
+  const handleRemoveExemption = () => {
+    setAppliedExemption(null);
+    setTaxExemptionInput('');
+    setExemptionError(null);
+  };
+
   const handleProceedToPayment = async (address: CheckoutShippingAddress | null) => {
     if (!authSession?.access_token) {
       setAuthError('Please sign in before continuing to checkout.');
@@ -1055,7 +1106,7 @@ export default function App() {
     const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
     const isWarehousePickup = deliveryType === 'warehouse_pickup';
     const shippingAmount = isWarehousePickup ? 0 : (shippingMethod === 'priority' ? 12 : 35);
-    const taxAmount = subtotal * 0.0825;
+    const taxAmount = subtotal * effectiveTaxRate;
 
     setIsInitiatingCheckout(true);
     setAuthError(null);
@@ -1067,6 +1118,7 @@ export default function App() {
           shipping_method: isWarehousePickup ? 'warehouse_pickup' : shippingMethod,
           shipping_amount: shippingAmount,
           tax_amount: taxAmount,
+          ...(appliedExemption ? { tax_exemption_code: appliedExemption.code } : {}),
           return_url: `${window.location.origin}/checkout/confirmed`,
           ...(isWarehousePickup
             ? { pickup_point_id: selectedPickupPointId ?? undefined }
@@ -1408,6 +1460,8 @@ export default function App() {
                 }}
                 onBackToCart={() => requireAuthForView('cart')}
                 onPaymentSuccess={handlePaymentSuccess}
+                taxRate={effectiveTaxRate}
+                appliedExemption={appliedExemption}
               />
             </CheckoutElementsProvider>
           ) : null
@@ -1459,10 +1513,19 @@ export default function App() {
             onBackToCart={() => requireAuthForView('cart')}
             onGoToAccount={() => setView('account')}
             onProceedToPayment={handleProceedToPayment}
+            taxRate={effectiveTaxRate}
+            taxExemptionInput={taxExemptionInput}
+            appliedExemption={appliedExemption}
+            exemptionError={exemptionError}
+            isValidatingExemption={isValidatingExemption}
+            onTaxExemptionInputChange={setTaxExemptionInput}
+            onApplyExemption={handleApplyExemption}
+            onRemoveExemption={handleRemoveExemption}
           />
         ) : view === 'cart' ? (
           <ShoppingBagView
             key="cart"
+            taxRate={taxRatePercent / 100}
             cartItems={cartItems}
             staleCartWarning={cartItems.some(
               (i) => i.maxStock !== undefined && i.quantity > i.maxStock,
@@ -1684,6 +1747,7 @@ export default function App() {
 function ShoppingBagView({
   cartItems,
   staleCartWarning,
+  taxRate = 0.07,
   onClose,
   onGoHome,
   onProceedToShipping,
@@ -1699,6 +1763,7 @@ function ShoppingBagView({
 }: {
   cartItems: CartItem[];
   staleCartWarning?: boolean;
+  taxRate?: number;
   onClose: () => void;
   onGoHome: () => void;
   onProceedToShipping: () => void;
@@ -1714,7 +1779,7 @@ function ShoppingBagView({
   key?: string;
 }) {
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const tax = subtotal * 0.08;
+  const tax = subtotal * taxRate;
   const total = subtotal + tax;
   const [promoCode, setPromoCode] = useState('');
   const [promoError, setPromoError] = useState<string | null>(null);
@@ -2089,6 +2154,14 @@ function ShippingView({
   onBackToCart,
   onGoToAccount,
   onProceedToPayment,
+  taxRate = 0.07,
+  taxExemptionInput,
+  appliedExemption,
+  exemptionError,
+  isValidatingExemption = false,
+  onTaxExemptionInputChange,
+  onApplyExemption,
+  onRemoveExemption,
 }: {
   authSession: AuthSession;
   cartItems: CartItem[];
@@ -2106,12 +2179,20 @@ function ShippingView({
   onBackToCart: () => void;
   onGoToAccount: () => void;
   onProceedToPayment: (address: CheckoutShippingAddress | null) => void;
+  taxRate?: number;
+  taxExemptionInput: string;
+  appliedExemption: { code: string; holder: string | null } | null;
+  exemptionError: string | null;
+  isValidatingExemption?: boolean;
+  onTaxExemptionInputChange: (value: string) => void;
+  onApplyExemption: () => void;
+  onRemoveExemption: () => void;
   key?: string;
 }) {
   const isWarehousePickup = deliveryType === 'warehouse_pickup';
   const shippingCost = isWarehousePickup ? 0 : (shippingMethod === 'priority' ? 12 : 35);
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const tax = subtotal * 0.08;
+  const tax = subtotal * taxRate;
   const total = subtotal + shippingCost + tax;
   const summaryItem = cartItems[0] ?? null;
   const [savedAddresses, setSavedAddresses] = useState<UserAddress[]>([]);
@@ -2518,7 +2599,6 @@ function ShippingView({
                         <div className="text-3xl font-black tracking-[-0.04em]">Priority Tech-Ship</div>
                         <div className={`mt-2 text-xl ${shippingMethod === 'priority' ? 'text-white/85' : 'text-[#5d95bc]'}`}>2-3 Business Days</div>
                       </div>
-                      <div className="text-2xl font-black">$12.00</div>
                     </div>
                   </button>
                   <button
@@ -2535,7 +2615,6 @@ function ShippingView({
                         <div className="text-3xl font-black tracking-[-0.04em]">Quantum Express</div>
                         <div className={`mt-2 text-xl ${shippingMethod === 'express' ? 'text-white/85' : 'text-[#5d95bc]'}`}>Next Day Guaranteed</div>
                       </div>
-                      <div className="text-2xl font-black">$35.00</div>
                     </div>
                   </button>
                 </div>
@@ -2598,9 +2677,55 @@ function ShippingView({
                   <span className="font-black text-[#1f6dad]">{formatCurrency(shippingCost)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Tax (Est.)</span>
+                  <span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">
+                    {appliedExemption ? 'Tax (Exempt)' : 'Tax (Est.)'}
+                  </span>
                   <span className="font-black text-[#1f6dad]">{formatCurrency(tax)}</span>
                 </div>
+              </div>
+
+              <div className="mt-6 rounded-[14px] border border-[#bcdcef] bg-white/60 p-4">
+                <span className="mb-2 block text-[12px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">
+                  Tax Exemption Code
+                </span>
+                {appliedExemption ? (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[13px] font-bold text-[#1f6dad]">
+                      <span className="rounded bg-[#d8effb] px-2 py-1 font-black uppercase tracking-[0.04em]">{appliedExemption.code}</span>
+                      {appliedExemption.holder ? <span className="ml-2 text-[#5c95bd]">{appliedExemption.holder}</span> : null}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={onRemoveExemption}
+                      className="text-[12px] font-black uppercase tracking-[0.06em] text-[#1f6dad] hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={taxExemptionInput}
+                        onChange={(e) => onTaxExemptionInputChange(e.target.value)}
+                        placeholder="Enter certificate code"
+                        className="w-full rounded-[10px] border border-[#bcdcef] bg-white px-3 py-2 text-[14px] font-semibold text-[#1f6dad] outline-none focus:border-[#7eb7db]"
+                      />
+                      <button
+                        type="button"
+                        onClick={onApplyExemption}
+                        disabled={isValidatingExemption || !taxExemptionInput.trim()}
+                        className="shrink-0 rounded-[10px] bg-[linear-gradient(90deg,#0f66a6_0%,#2c73aa_100%)] px-4 py-2 text-[13px] font-black uppercase tracking-[0.06em] text-white transition-opacity disabled:opacity-50"
+                      >
+                        {isValidatingExemption ? '...' : 'Apply'}
+                      </button>
+                    </div>
+                    {exemptionError ? (
+                      <p className="mt-2 text-[12px] font-bold text-red-600">{exemptionError}</p>
+                    ) : null}
+                  </>
+                )}
               </div>
 
               <div className="my-7 border-t border-[#7eb7db]"></div>
@@ -2756,6 +2881,8 @@ function PaymentView({
   onBackToShipping,
   onBackToCart,
   onPaymentSuccess,
+  taxRate = 0.07,
+  appliedExemption,
 }: {
   cartItems: CartItem[];
   checkoutShippingAddress: CheckoutShippingAddress | null;
@@ -2766,13 +2893,15 @@ function PaymentView({
   onBackToShipping: () => void;
   onBackToCart: () => void;
   onPaymentSuccess: () => Promise<void>;
+  taxRate?: number;
+  appliedExemption?: { code: string; holder: string | null } | null;
   key?: string;
 }) {
   const isWarehousePickup = deliveryType === 'warehouse_pickup';
   const shippingCost = isWarehousePickup ? 0 : (shippingMethod === 'priority' ? 12 : 35);
   const shippingLabel = isWarehousePickup ? 'WAREHOUSE PICKUP (FREE)' : (shippingMethod === 'priority' ? 'STANDARD EXPRESS (2-3 BUSINESS DAYS)' : 'QUANTUM EXPRESS (NEXT DAY)');
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const tax = subtotal * 0.0825;
+  const tax = subtotal * taxRate;
   const total = subtotal + shippingCost + tax;
   const shippingName = [checkoutShippingAddress?.firstName, checkoutShippingAddress?.lastName].filter(Boolean).join(' ').trim();
 
@@ -2872,7 +3001,7 @@ function PaymentView({
             <div className="space-y-4 text-sm">
               <div className="flex items-center justify-between"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Subtotal</span><span className="font-black text-[#1f6dad]">{formatCurrency(subtotal)}</span></div>
               <div className="flex items-center justify-between"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Shipping</span><span className="font-black text-[#1f6dad]">{formatCurrency(shippingCost)}</span></div>
-              <div className="flex items-center justify-between"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Estimated Tax</span><span className="font-black text-[#1f6dad]">{formatCurrency(tax)}</span></div>
+              <div className="flex items-center justify-between"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">{appliedExemption ? 'Tax (Exempt)' : 'Estimated Tax'}</span><span className="font-black text-[#1f6dad]">{formatCurrency(tax)}</span></div>
             </div>
             <div className="my-6 border-t border-[#7eb7db]"></div>
             <div className="flex items-center justify-between gap-4">
@@ -4861,6 +4990,7 @@ function findCategoryById(categoryId: string, cats: import('./lib/api').Category
 function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, onSaveProduct }: { products: Product[]; categories: Category[]; isLoading: boolean; onAddToCart: (slug: string, variantId?: string, quantity?: number) => void; onProductSelect: (slug: string) => void; onSaveProduct: (productSlug: string, quantity?: number) => Promise<void>; key?: string }) {
   const [activeCategory, setActiveCategory] = useState('');
   const [expandedParentId, setExpandedParentId] = useState('');
+  const [expandedChildId, setExpandedChildId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('Popularity');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -4934,6 +5064,7 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
                 onClick={() => {
                   setActiveCategory('');
                   setExpandedParentId('');
+                  setExpandedChildId('');
                   setCurrentPage(1);
                   setIsSidebarOpen(false);
                 }}
@@ -4954,6 +5085,7 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
                       type="button"
                       onClick={() => {
                         setExpandedParentId(cat.id);
+                        setExpandedChildId('');
                         setActiveCategory(cat.id);
                         setCurrentPage(1);
                         setIsSidebarOpen(activeChildren.length === 0);
@@ -4974,24 +5106,62 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
                     </button>
                     {isExpanded && activeChildren.length > 0 && (
                       <div className="mt-1 space-y-1 pl-3">
-                        {activeChildren.map((child) => (
-                          <button
-                            key={child.id}
-                            type="button"
-                            onClick={() => {
-                              setActiveCategory(child.id);
-                              setCurrentPage(1);
-                              setIsSidebarOpen(false);
-                            }}
-                            className={`flex w-full items-center rounded-[10px] px-4 py-2 text-left text-[12px] font-bold uppercase tracking-[-0.01em] transition-all ${
-                              activeCategory === child.id
-                                ? 'bg-[linear-gradient(90deg,#b8ddf2_0%,#c8e7f5_100%)] text-[#1b4f7e] shadow-[0_8px_20px_rgba(95,168,215,0.14)]'
-                                : 'text-[#4a8ab0] hover:bg-white/50'
-                            }`}
-                          >
-                            {child.name}
-                          </button>
-                        ))}
+                        {activeChildren.map((child) => {
+                          const activeGrandchildren = child.children.filter(c => c.is_active);
+                          const isChildExpanded = expandedChildId === child.id;
+                          return (
+                            <div key={child.id}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveCategory(child.id);
+                                  setCurrentPage(1);
+                                  if (activeGrandchildren.length > 0) {
+                                    setExpandedChildId(isChildExpanded ? '' : child.id);
+                                  } else {
+                                    setExpandedChildId('');
+                                    setIsSidebarOpen(false);
+                                  }
+                                }}
+                                className={`flex w-full items-center justify-between rounded-[10px] px-4 py-2 text-left text-[12px] font-bold uppercase tracking-[-0.01em] transition-all ${
+                                  activeCategory === child.id
+                                    ? 'bg-[linear-gradient(90deg,#b8ddf2_0%,#c8e7f5_100%)] text-[#1b4f7e] shadow-[0_8px_20px_rgba(95,168,215,0.14)]'
+                                    : 'text-[#4a8ab0] hover:bg-white/50'
+                                }`}
+                              >
+                                <span>{child.name}</span>
+                                {activeGrandchildren.length > 0 && (
+                                  <ChevronRight
+                                    size={12}
+                                    className={`shrink-0 transition-transform duration-200 ${isChildExpanded ? 'rotate-90' : ''}`}
+                                  />
+                                )}
+                              </button>
+                              {isChildExpanded && activeGrandchildren.length > 0 && (
+                                <div className="mt-1 space-y-1 pl-3">
+                                  {activeGrandchildren.map((grand) => (
+                                    <button
+                                      key={grand.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveCategory(grand.id);
+                                        setCurrentPage(1);
+                                        setIsSidebarOpen(false);
+                                      }}
+                                      className={`flex w-full items-center rounded-[8px] px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-[-0.01em] transition-all ${
+                                        activeCategory === grand.id
+                                          ? 'bg-[linear-gradient(90deg,#cbe7f7_0%,#d8effb_100%)] text-[#1b4f7e] shadow-[0_6px_16px_rgba(95,168,215,0.12)]'
+                                          : 'text-[#5b97bb] hover:bg-white/50'
+                                      }`}
+                                    >
+                                      {grand.name}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

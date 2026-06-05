@@ -483,8 +483,24 @@ export type CheckoutPayload = {
   shipping_method: string;
   shipping_amount: number;
   tax_amount: number;
+  tax_exemption_code?: string;
   return_url?: string;
 };
+
+export type TaxConfig = { tax_rate: number };
+
+export type TaxExemptionValidation = { valid: boolean; holder_name: string | null };
+
+export async function getTaxConfigRequest(): Promise<TaxConfig> {
+  return apiRequest<TaxConfig>('/api/v1/tax/config');
+}
+
+export async function validateTaxExemptionRequest(code: string): Promise<TaxExemptionValidation> {
+  return apiRequest<TaxExemptionValidation>('/api/v1/tax/validate-exemption', {
+    method: 'POST',
+    body: { code },
+  });
+}
 
 export type CheckoutResponse = {
   order_id: string;
