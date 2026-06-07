@@ -502,6 +502,18 @@ export async function validateTaxExemptionRequest(code: string): Promise<TaxExem
   });
 }
 
+export type ShippingQuoteResult = {
+  postal_code: string;
+  covered: boolean;
+  price: string | null;
+  support_email: string;
+};
+
+export async function getShippingQuoteRequest(postalCode: string): Promise<ShippingQuoteResult> {
+  const qs = new URLSearchParams({ postal_code: postalCode }).toString();
+  return apiRequest<ShippingQuoteResult>(`/api/v1/shipping/quote?${qs}`);
+}
+
 export type CheckoutResponse = {
   order_id: string;
   order_number: string;

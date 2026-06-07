@@ -80,6 +80,7 @@ import {
   getCurrentUserRequest,
   getTaxConfigRequest,
   validateTaxExemptionRequest,
+  getShippingQuoteRequest,
   listCategoriesRequest,
   listOrdersRequest,
   listProductsRequest,
@@ -492,6 +493,7 @@ export default function App() {
   const [exemptionError, setExemptionError] = useState<string | null>(null);
   const [isValidatingExemption, setIsValidatingExemption] = useState(false);
   const [deliveryType, setDeliveryType] = useState<'home_delivery' | 'warehouse_pickup'>('home_delivery');
+  const [shippingQuote, setShippingQuote] = useState<{ covered: boolean; price: number | null; support_email: string } | null>(null);
   const [selectedPickupPointId, setSelectedPickupPointId] = useState<string | null>(null);
   const [checkoutShippingAddress, setCheckoutShippingAddress] = useState<CheckoutShippingAddress | null>(null);
   const [checkoutResponse, setCheckoutResponse] = useState<CheckoutResponse | null>(null);
@@ -1105,7 +1107,13 @@ export default function App() {
 
     const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
     const isWarehousePickup = deliveryType === 'warehouse_pickup';
-    const shippingAmount = isWarehousePickup ? 0 : (shippingMethod === 'priority' ? 12 : 35);
+    // Home delivery is only available for covered postal codes; the price comes
+    // from the backend shipping zone (sent here only for display).
+    if (!isWarehousePickup && !shippingQuote?.covered) {
+      setAuthError('We do not deliver to this postal code yet. Choose warehouse pickup or contact us.');
+      return;
+    }
+    const shippingAmount = isWarehousePickup ? 0 : (shippingQuote?.price ?? 0);
     const taxAmount = subtotal * effectiveTaxRate;
 
     setIsInitiatingCheckout(true);
@@ -1115,7 +1123,7 @@ export default function App() {
     try {
       const result = await callWithRefresh((token) =>
         checkoutRequest(token, {
-          shipping_method: isWarehousePickup ? 'warehouse_pickup' : shippingMethod,
+          shipping_method: isWarehousePickup ? 'warehouse_pickup' : 'home_delivery',
           shipping_amount: shippingAmount,
           tax_amount: taxAmount,
           ...(appliedExemption ? { tax_exemption_code: appliedExemption.code } : {}),
@@ -1462,6 +1470,7 @@ export default function App() {
                 onPaymentSuccess={handlePaymentSuccess}
                 taxRate={effectiveTaxRate}
                 appliedExemption={appliedExemption}
+                shippingPrice={deliveryType === 'warehouse_pickup' ? 0 : (shippingQuote?.price ?? 0)}
               />
             </CheckoutElementsProvider>
           ) : null
@@ -1521,6 +1530,8 @@ export default function App() {
             onTaxExemptionInputChange={setTaxExemptionInput}
             onApplyExemption={handleApplyExemption}
             onRemoveExemption={handleRemoveExemption}
+            shippingQuote={shippingQuote}
+            onShippingQuoteChange={setShippingQuote}
           />
         ) : view === 'cart' ? (
           <ShoppingBagView
@@ -2162,6 +2173,8 @@ function ShippingView({
   onTaxExemptionInputChange,
   onApplyExemption,
   onRemoveExemption,
+  shippingQuote,
+  onShippingQuoteChange,
 }: {
   authSession: AuthSession;
   cartItems: CartItem[];
@@ -2187,10 +2200,12 @@ function ShippingView({
   onTaxExemptionInputChange: (value: string) => void;
   onApplyExemption: () => void;
   onRemoveExemption: () => void;
+  shippingQuote: { covered: boolean; price: number | null; support_email: string } | null;
+  onShippingQuoteChange: (q: { covered: boolean; price: number | null; support_email: string } | null) => void;
   key?: string;
 }) {
   const isWarehousePickup = deliveryType === 'warehouse_pickup';
-  const shippingCost = isWarehousePickup ? 0 : (shippingMethod === 'priority' ? 12 : 35);
+  const shippingCost = isWarehousePickup ? 0 : (shippingQuote?.covered ? Number(shippingQuote.price ?? 0) : 0);
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const tax = subtotal * taxRate;
   const total = subtotal + shippingCost + tax;
@@ -2202,6 +2217,7 @@ function ShippingView({
   const [pickupPoints, setPickupPoints] = useState<PickupPointPublic[]>([]);
   const [isLoadingPickupPoints, setIsLoadingPickupPoints] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [isQuoting, setIsQuoting] = useState(false);
 
   const validateShippingForm = (): boolean => {
     const f = shippingForm;
@@ -2238,6 +2254,36 @@ function ShippingView({
     postalCode: '',
     country: 'US',
   });
+
+  // Quote home-delivery availability + price for the entered postal code.
+  useEffect(() => {
+    if (isWarehousePickup) {
+      onShippingQuoteChange(null);
+      return;
+    }
+    const zip = shippingForm.postalCode.trim();
+    if (zip.length < 3 || zip.toUpperCase() === 'N/A') {
+      onShippingQuoteChange(null);
+      return;
+    }
+    let cancelled = false;
+    setIsQuoting(true);
+    const handle = setTimeout(() => {
+      getShippingQuoteRequest(zip)
+        .then((q) => {
+          if (!cancelled)
+            onShippingQuoteChange({
+              covered: q.covered,
+              price: q.price !== null ? Number(q.price) : null,
+              support_email: q.support_email,
+            });
+        })
+        .catch(() => { if (!cancelled) onShippingQuoteChange(null); })
+        .finally(() => { if (!cancelled) setIsQuoting(false); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(handle); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shippingForm.postalCode, isWarehousePickup]);
 
   const applyAddressToForm = (address: UserAddress) => {
     const { firstName, lastName } = splitFullName(address.contact_name ?? authSession?.user.full_name ?? '');
@@ -2582,42 +2628,54 @@ function ShippingView({
               <div>
                 <div className="mb-8 flex items-center gap-4">
                   <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-lg bg-[linear-gradient(180deg,#7eb7db_0%,#9bc8e2_100%)] px-2 text-xs font-black text-white shadow-[0_8px_18px_rgba(107,154,187,0.16)]">5</span>
-                  <h2 className="text-[30px] font-black tracking-[-0.04em] text-[#1f6dad]">Delivery Speed</h2>
+                  <h2 className="text-[30px] font-black tracking-[-0.04em] text-[#1f6dad]">Home Delivery</h2>
                 </div>
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => onShippingMethodChange('priority')}
-                    className={`rounded-[18px] border p-6 text-left shadow-[0_12px_28px_rgba(107,154,187,0.12)] transition-all ${
-                      shippingMethod === 'priority'
-                        ? 'border-[#7eb7db] bg-[linear-gradient(90deg,#0f66a6_0%,#2c73aa_100%)] text-white'
-                        : 'border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] text-[#1f6dad]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-4">
-                      <div>
-                        <div className="text-3xl font-black tracking-[-0.04em]">Priority Tech-Ship</div>
-                        <div className={`mt-2 text-xl ${shippingMethod === 'priority' ? 'text-white/85' : 'text-[#5d95bc]'}`}>2-3 Business Days</div>
+                {(() => {
+                  const zip = shippingForm.postalCode.trim();
+                  if (!zip || zip.length < 3 || zip.toUpperCase() === 'N/A') {
+                    return (
+                      <div className="rounded-[18px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] p-6 text-[#1f6dad]">
+                        <div className="text-lg font-bold">Enter your postal code above to check delivery availability.</div>
                       </div>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onShippingMethodChange('express')}
-                    className={`rounded-[18px] border p-6 text-left shadow-[0_12px_28px_rgba(107,154,187,0.12)] transition-all ${
-                      shippingMethod === 'express'
-                        ? 'border-[#7eb7db] bg-[linear-gradient(90deg,#0f66a6_0%,#2c73aa_100%)] text-white'
-                        : 'border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] text-[#1f6dad]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-4">
-                      <div>
-                        <div className="text-3xl font-black tracking-[-0.04em]">Quantum Express</div>
-                        <div className={`mt-2 text-xl ${shippingMethod === 'express' ? 'text-white/85' : 'text-[#5d95bc]'}`}>Next Day Guaranteed</div>
+                    );
+                  }
+                  if (isQuoting) {
+                    return (
+                      <div className="rounded-[18px] border border-[#d6e4ec] bg-white p-6 text-[#5d95bc]">
+                        Checking availability for {zip}…
                       </div>
+                    );
+                  }
+                  if (shippingQuote?.covered) {
+                    return (
+                      <div className="rounded-[18px] border border-[#7eb7db] bg-[linear-gradient(90deg,#0f66a6_0%,#2c73aa_100%)] p-6 text-white">
+                        <div className="flex items-center justify-between gap-4">
+                          <div>
+                            <div className="text-3xl font-black tracking-[-0.04em]">Home Delivery</div>
+                            <div className="mt-2 text-xl text-white/85">Delivery to {zip}</div>
+                          </div>
+                          <div className="text-2xl font-black">{formatCurrency(Number(shippingQuote.price ?? 0))}</div>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="rounded-[18px] border-2 border-amber-300 bg-amber-50 p-6">
+                      <div className="text-xl font-black text-amber-800">We don't deliver to this area yet</div>
+                      <p className="mt-2 text-[15px] font-semibold text-amber-700">
+                        Sorry, home delivery isn't available for postal code {zip}. You can choose warehouse pickup instead, or contact us about your area.
+                      </p>
+                      {shippingQuote?.support_email ? (
+                        <a
+                          href={`mailto:${shippingQuote.support_email}?subject=${encodeURIComponent(`Shipping availability for ${zip}`)}`}
+                          className="mt-4 inline-flex items-center gap-2 rounded-[12px] bg-amber-600 px-5 py-3 text-sm font-black uppercase tracking-[0.06em] text-white transition hover:brightness-110"
+                        >
+                          Contact us — {shippingQuote.support_email}
+                        </a>
+                      ) : null}
                     </div>
-                  </button>
-                </div>
+                  );
+                })()}
               </div>
                 </>
               )}
@@ -2635,14 +2693,28 @@ function ShippingView({
                 </button>
                 <button
                   type="button"
-                  disabled={isLoading || (isWarehousePickup && !selectedPickupPointId)}
+                  disabled={
+                    isLoading ||
+                    (isWarehousePickup && !selectedPickupPointId) ||
+                    (!isWarehousePickup && !shippingQuote?.covered)
+                  }
                   onClick={() => {
                     if (!isWarehousePickup && !validateShippingForm()) return;
+                    if (!isWarehousePickup && !shippingQuote?.covered) {
+                      setFormError('We do not deliver to this postal code yet. Choose warehouse pickup or contact us.');
+                      return;
+                    }
                     onProceedToPayment(isWarehousePickup ? null : shippingForm);
                   }}
                   className="rounded-[16px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-10 py-5 text-[20px] font-black text-white shadow-[0_16px_30px_rgba(13,77,138,0.24)] transition-transform hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
                 >
-                  {isLoading ? 'Preparing Order…' : isWarehousePickup && !selectedPickupPointId ? 'Select a Pickup Location' : 'Proceed to Payment'}
+                  {isLoading
+                    ? 'Preparing Order…'
+                    : isWarehousePickup && !selectedPickupPointId
+                    ? 'Select a Pickup Location'
+                    : !isWarehousePickup && !shippingQuote?.covered
+                    ? 'No delivery to this area'
+                    : 'Proceed to Payment'}
                 </button>
               </div>
             </form>
@@ -2883,6 +2955,7 @@ function PaymentView({
   onPaymentSuccess,
   taxRate = 0.07,
   appliedExemption,
+  shippingPrice = 0,
 }: {
   cartItems: CartItem[];
   checkoutShippingAddress: CheckoutShippingAddress | null;
@@ -2895,11 +2968,12 @@ function PaymentView({
   onPaymentSuccess: () => Promise<void>;
   taxRate?: number;
   appliedExemption?: { code: string; holder: string | null } | null;
+  shippingPrice?: number;
   key?: string;
 }) {
   const isWarehousePickup = deliveryType === 'warehouse_pickup';
-  const shippingCost = isWarehousePickup ? 0 : (shippingMethod === 'priority' ? 12 : 35);
-  const shippingLabel = isWarehousePickup ? 'WAREHOUSE PICKUP (FREE)' : (shippingMethod === 'priority' ? 'STANDARD EXPRESS (2-3 BUSINESS DAYS)' : 'QUANTUM EXPRESS (NEXT DAY)');
+  const shippingCost = isWarehousePickup ? 0 : shippingPrice;
+  const shippingLabel = isWarehousePickup ? 'WAREHOUSE PICKUP (FREE)' : 'HOME DELIVERY';
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const tax = subtotal * taxRate;
   const total = subtotal + shippingCost + tax;
@@ -2959,7 +3033,7 @@ function PaymentView({
                         <div className="mt-5 flex flex-wrap gap-2">
                           <span className="rounded-[10px] bg-white/18 px-4 py-2 text-[12px] font-black text-white">In Stock</span>
                           <span className="rounded-[10px] bg-white/18 px-4 py-2 text-[12px] font-black text-white">
-                            {shippingMethod === 'priority' ? 'Expedited Shipping' : 'Ships Next Day'}
+                            {isWarehousePickup ? 'Warehouse Pickup' : 'Home Delivery'}
                           </span>
                         </div>
                       </div>
@@ -3061,7 +3135,7 @@ function OrderConfirmedView({
   onContinueShopping: () => void;
   key?: string;
 }) {
-  const shippingCost = Number(order?.shipping_amount ?? (shippingMethod === 'priority' ? 12 : 35));
+  const shippingCost = Number(order?.shipping_amount ?? 0);
   const subtotal = Number(order?.subtotal_amount ?? 0);
   const tax = Number(order?.tax_amount ?? subtotal * 0.08);
   const total = Number(order?.total_amount ?? subtotal + shippingCost + tax);
@@ -3135,10 +3209,10 @@ function OrderConfirmedView({
                   </div>
                   <div>
                     <div className="text-2xl font-black text-[#1f6dad]">
-                      {orderShippingMethod === 'priority' ? 'Priority delivery window confirmed' : 'Express delivery window confirmed'}
+                      {orderShippingMethod === 'warehouse_pickup' ? 'Warehouse pickup confirmed' : 'Home delivery confirmed'}
                     </div>
                     <div className="mt-2 text-lg italic text-[#5d95bc]">
-                      {orderShippingMethod === 'priority' ? 'Standard High-Priority Logistics' : 'Quantum Express Priority Lane'}
+                      {orderShippingMethod === 'warehouse_pickup' ? 'Ready for pickup at our facility' : 'Delivery to your address'}
                     </div>
                   </div>
                 </div>
