@@ -173,6 +173,8 @@ jobs:
           MATRIX_ENV: ${{ matrix.env }}
           VERSION_TAG: ${{ env.VERSION_TAG }}
           CHANNEL_TAG: ${{ env.CHANNEL_TAG }}
+          # How many recent versions per env to retain so a deploy can roll back.
+          KEEP_VERSIONS: "5"
         with:
           script: |
             const owner = context.repo.owner;
@@ -219,10 +221,16 @@ jobs:
               .filter((version) => version.tags.some((t) => t.startsWith(envPrefix)))
               .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-            for (const version of taggedVersions) {
-              const shouldKeep = version.tags.some((t) => keepTags.has(t));
+            // Retain the newest `keepCount` versions for this env, plus the
+            // just-built and channel tags. Deleting every prior version (the
+            // old behaviour) removed the exact digests a failed deploy needs to
+            // roll back to, leaving prod with no recovery path.
+            const keepCount = Number(process.env.KEEP_VERSIONS || "5");
+            for (let i = 0; i < taggedVersions.length; i++) {
+              const version = taggedVersions[i];
+              const isProtected = version.tags.some((t) => keepTags.has(t));
 
-              if (shouldKeep) {
+              if (i < keepCount || isProtected) {
                 core.info(`Keeping ${envPrefix}* version ${version.id} with tags: ${version.tags.join(", ")}`);
                 continue;
               }
