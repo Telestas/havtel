@@ -481,8 +481,7 @@ export type CheckoutPayload = {
   shipping_address?: OrderShippingAddress;
   pickup_point_id?: string;
   shipping_method: string;
-  shipping_amount: number;
-  tax_amount: number;
+  // shipping_amount / tax_amount are computed server-side and are no longer sent.
   tax_exemption_code?: string;
   return_url?: string;
 };

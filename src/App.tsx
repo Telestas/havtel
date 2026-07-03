@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePhoneInput, defaultCountries, parseCountry } from 'react-international-phone';
 import { isValidPhoneNumber } from 'libphonenumber-js';
-import { trackPageView } from './lib/analytics';
+import { trackPageView, getStoredConsent, enableAnalytics, grantConsent, denyConsent } from './lib/analytics';
 import { setPageMeta, usePageMeta } from './hooks/usePageMeta';
 import { loadStripe } from '@stripe/stripe-js';
 import { CheckoutElementsProvider, PaymentElement, useCheckout } from '@stripe/react-stripe-js/checkout';
@@ -730,6 +730,14 @@ export default function App() {
     }
   }, [cartItems]);
 
+  // Cookie consent: only load analytics after the user opts in.
+  const [showCookieConsent, setShowCookieConsent] = useState(false);
+  useEffect(() => {
+    const consent = getStoredConsent();
+    if (consent === 'granted') enableAnalytics();
+    else if (consent === null) setShowCookieConsent(true);
+  }, []);
+
   // Clear the checkout error banner once the user leaves the cart.
   useEffect(() => {
     if (view !== 'cart') setCheckoutError(null);
@@ -1086,19 +1094,17 @@ export default function App() {
       setAuthError('We do not deliver to this postal code yet. Choose warehouse pickup or contact us.');
       return;
     }
-    const shippingAmount = isWarehousePickup ? 0 : (shippingQuote?.price ?? 0);
-    const taxAmount = subtotal * effectiveTaxRate;
 
     setIsInitiatingCheckout(true);
     setAuthError(null);
     if (address) setCheckoutShippingAddress(address);
 
     try {
+      // shipping_amount / tax_amount are intentionally NOT sent — the backend
+      // recomputes both server-side and ignores any client-supplied values.
       const result = await callWithRefresh((token) =>
         checkoutRequest(token, {
           shipping_method: isWarehousePickup ? 'warehouse_pickup' : 'home_delivery',
-          shipping_amount: shippingAmount,
-          tax_amount: taxAmount,
           ...(appliedExemption ? { tax_exemption_code: appliedExemption.code } : {}),
           return_url: `${window.location.origin}/checkout/confirmed`,
           ...(isWarehousePickup
@@ -1302,6 +1308,35 @@ export default function App() {
         )}
       </AnimatePresence>
       </>
+      )}
+
+      {showCookieConsent && (
+        <div className="fixed inset-x-0 bottom-0 z-[80] flex justify-center px-4 pb-4">
+          <div className="flex w-full max-w-3xl flex-col gap-4 rounded-2xl border border-[#2a3038] bg-[#1c2025] px-6 py-5 shadow-2xl sm:flex-row sm:items-center">
+            <p className="flex-1 text-sm text-slate-300">
+              We use cookies for analytics to improve the store. You can accept or reject non-essential cookies.{' '}
+              <button type="button" onClick={() => setView('privacy')} className="underline hover:text-white">
+                Privacy Policy
+              </button>
+            </p>
+            <div className="flex shrink-0 gap-3">
+              <button
+                type="button"
+                onClick={() => { denyConsent(); setShowCookieConsent(false); }}
+                className="rounded-xl border border-[#3a424c] px-5 py-2.5 text-sm font-bold text-slate-200 transition hover:bg-white/5"
+              >
+                Reject All
+              </button>
+              <button
+                type="button"
+                onClick={() => { grantConsent(); setShowCookieConsent(false); }}
+                className="rounded-xl bg-[#aac7ff] px-5 py-2.5 text-sm font-bold text-[#101419] transition hover:brightness-110"
+              >
+                Accept All
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {checkoutError && view === 'cart' && (
@@ -1726,22 +1761,12 @@ export default function App() {
             </ul>
           </div>
           <div>
-            <h4 className="text-white font-bold mb-5 uppercase tracking-wider text-xs">Stay Updated</h4>
-            <p className="mb-5 text-white/60 text-sm leading-relaxed">Forging the next era of high-performance computing through uncompromising engineering and design.</p>
-            <div className="bg-white/10 rounded-xl p-1 flex items-center border border-white/20">
-              <input
-                className="bg-transparent border-none focus:outline-none px-4 py-2 text-xs flex-1 text-white placeholder:text-white/50"
-                placeholder="Email"
-                type="text"
-              />
-              <button className="bg-white text-[#1a3f6f] p-2 rounded-lg hover:bg-white/90 transition-colors">
-                <Send size={14} />
-              </button>
-            </div>
+            <h4 className="text-white font-bold mb-5 uppercase tracking-wider text-xs">About Havtel</h4>
+            <p className="text-white/60 text-sm leading-relaxed">Forging the next era of high-performance computing through uncompromising engineering and design.</p>
           </div>
         </div>
         <div className="max-w-7xl mx-auto pt-8 border-t border-white/20 text-center text-xs text-white/40">
-          Copyright © 2025 HAVTEL CORP. All Rights Reserved.
+          Copyright © 2026 HAVTEL CORP. All Rights Reserved.
         </div>
       </footer>
 
@@ -1788,8 +1813,6 @@ function ShoppingBagView({
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const tax = subtotal * taxRate;
   const total = subtotal + tax;
-  const [promoCode, setPromoCode] = useState('');
-  const [promoError, setPromoError] = useState<string | null>(null);
 
   return (
     <motion.div
@@ -2071,31 +2094,6 @@ function ShoppingBagView({
                 </div>
                 <div className="mt-2 text-[12px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Including VAT</div>
               </div>
-            </div>
-
-            <div className="mt-10">
-              <label className="mb-4 block text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">
-                Promotional Code
-              </label>
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  value={promoCode}
-                  onChange={(e) => { setPromoCode(e.target.value); setPromoError(null); }}
-                  placeholder="Enter code"
-                  className="min-w-0 flex-1 rounded-[16px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#d7ebf5_0%,#cfe6f3_100%)] px-5 py-4 text-base font-bold text-white placeholder:text-white/80 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => { if (promoCode.trim()) setPromoError('Invalid promotional code.'); }}
-                  className="rounded-[16px] bg-[linear-gradient(90deg,#63a8d5_0%,#74b4db_100%)] px-6 py-4 text-lg font-black text-white shadow-[0_10px_24px_rgba(107,154,187,0.16)] transition-colors hover:opacity-95"
-                >
-                  Apply
-                </button>
-              </div>
-              {promoError && (
-                <p className="mt-3 text-[13px] font-bold text-red-400">{promoError}</p>
-              )}
             </div>
 
             <button
@@ -3674,6 +3672,7 @@ function ProductDetailView({
   const [selectedTab, setSelectedTab] = useState<'description' | 'specs' | 'reviews'>('description');
   const [selectedVariantId, setSelectedVariantId] = useState<string>('');
   const [selectedImage, setSelectedImage] = useState(0);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -3684,9 +3683,10 @@ function ProductDetailView({
     setApiProduct(null);
     setSelectedVariantId('');
     setSelectedImage(0);
+    setLoadError(false);
     getProductRequest(productSlug, authToken)
       .then(setApiProduct)
-      .catch(() => {});
+      .catch(() => setLoadError(true));
   }, [productSlug, authToken]);
 
   const variantOptions = apiProduct?.variants ?? [];
@@ -3746,7 +3746,21 @@ function ProductDetailView({
         ? 'https://schema.org/InStock'
         : 'https://schema.org/OutOfStock',
     },
-  }) : null;
+    // Escape '<' so product content containing "</script>" can't break out of
+    // the JSON-LD <script> block (JSON.stringify alone does not escape it).
+  }).replace(/</g, '\\u003c') : null;
+
+  if (loadError) {
+    return (
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pt-20 min-h-screen flex flex-col items-center justify-center gap-6 bg-[linear-gradient(90deg,#ffffff_0%,#fbf7f4_72%,#fff6df_100%)] px-6 text-center">
+        <div className="text-2xl font-black text-[#1f6dad]">Product not found</div>
+        <p className="max-w-md text-[#5d95bc]">This product may have been removed or the link is incorrect.</p>
+        <button type="button" onClick={onBackToShop} className="rounded-[14px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-8 py-4 text-sm font-black text-white shadow-[0_14px_30px_rgba(13,77,138,0.22)]">
+          Back to Catalog
+        </button>
+      </motion.div>
+    );
+  }
 
   if (!apiProduct) {
     return (
@@ -5491,11 +5505,16 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
           {filteredProducts.length > 0 ? (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {pagedProducts.map((prod) => (
-                <button
+                <div
                   key={prod.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View ${prod.name}`}
                   onClick={() => onProductSelect(prod.slug)}
-                  className="group overflow-hidden rounded-[18px] border border-[#d5e3eb] bg-white/88 text-left shadow-[0_10px_28px_rgba(107,154,187,0.15)] transition-transform hover:-translate-y-1"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onProductSelect(prod.slug); }
+                  }}
+                  className="group cursor-pointer overflow-hidden rounded-[18px] border border-[#d5e3eb] bg-white/88 text-left shadow-[0_10px_28px_rgba(107,154,187,0.15)] transition-transform hover:-translate-y-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1c6aa7]"
                 >
                   <div className="relative rounded-t-[18px] border-b border-[#d6e7f0] bg-[radial-gradient(circle_at_top_left,#fff8de_0%,#ffffff_30%,#f3fbff_100%)] p-3">
                     {prod.isInStock ? (
@@ -5575,7 +5594,7 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
                       </div>
                     </div>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           ) : (
@@ -7375,9 +7394,14 @@ function Support() {
                 <div className="absolute right-[18%] top-[18%] h-3 w-3 rounded-full bg-white/90"></div>
                 <div className="absolute left-[58%] bottom-[22%] h-3 w-3 rounded-full bg-white/90"></div>
                 <div className="relative z-10 flex min-h-[250px] items-center justify-center">
-                  <button className="rounded-full bg-[linear-gradient(90deg,#7db8dd_0%,#6face0_100%)] px-10 py-5 text-[18px] font-black text-white shadow-[0_14px_30px_rgba(95,168,215,0.25)]">
-                    Miami Location
-                  </button>
+                  <a
+                    href="https://maps.google.com/?q=2531+NW+72nd+Ave+Miami+FL+33122"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-full bg-[linear-gradient(90deg,#7db8dd_0%,#6face0_100%)] px-10 py-5 text-[18px] font-black text-white shadow-[0_14px_30px_rgba(95,168,215,0.25)] transition-transform hover:scale-[1.02]"
+                  >
+                    Open in Maps
+                  </a>
                 </div>
               </div>
             </div>
