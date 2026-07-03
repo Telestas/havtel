@@ -364,6 +364,9 @@ export default function App() {
   const [view, setView] = useState<View>(safeInitialView(initialRoute.view));
   const [selectedProductSlug, setSelectedProductSlug] = useState<string | null>(initialRoute.productSlug);
   const [notification, setNotification] = useState<string | null>(null);
+  // Surfaced on the cart view after a failed/incomplete payment redirect — the
+  // notification toast lives inside the non-checkout chrome and never shows here.
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [authSession, setAuthSession] = useState<AuthSession>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
@@ -401,8 +404,22 @@ export default function App() {
   const [postLoginView, setPostLoginView] = useState<View | null>(null);
   const isAuthenticated = authSession !== null;
   const isPopNavigationRef = useRef(false);
-  const initialTokenRef = useRef(authSession?.access_token ?? null);
+  // Token present at mount (i.e. a page refresh with a live session). Read from
+  // storage synchronously — authSession is hydrated later in an effect, so
+  // `authSession?.access_token` here is always null, which made the
+  // "refresh → server is authoritative" cart-sync branch dead.
+  const initialTokenRef = useRef<string | null>((() => {
+    try {
+      const stored = localStorage.getItem(AUTH_STORAGE_KEY);
+      return stored ? ((JSON.parse(stored) as AuthResponse).access_token ?? null) : null;
+    } catch {
+      return null;
+    }
+  })());
   const isFirstCartSyncDoneRef = useRef(false);
+  // Single-flight lock: concurrent 401s must share one refresh call, or the
+  // losers use an already-rotated (revoked) refresh token and get logged out.
+  const refreshPromiseRef = useRef<Promise<AuthResponse> | null>(null);
 
   const cartCount = cartItems.reduce((total, item) => total + item.quantity, 0);
   const isCheckoutView =
@@ -561,7 +578,10 @@ export default function App() {
     const handlePopState = () => {
       const nextRoute = getCurrentRouteSnapshot();
       isPopNavigationRef.current = true;
-      setView(nextRoute.view);
+      // payment/shipping need transient state (client_secret, shipping form)
+      // that's gone after a back-navigation — redirect to cart instead of
+      // rendering a blank screen.
+      setView(safeInitialView(nextRoute.view));
       setSelectedProductSlug(nextRoute.productSlug);
       setTrackedOrderId(nextRoute.trackedOrderId);
     };
@@ -710,6 +730,11 @@ export default function App() {
     }
   }, [cartItems]);
 
+  // Clear the checkout error banner once the user leaves the cart.
+  useEffect(() => {
+    if (view !== 'cart') setCheckoutError(null);
+  }, [view]);
+
   // Scroll to top on every view change
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -748,7 +773,7 @@ export default function App() {
       setStripeReturnOrderId(pendingOrderId);
       setView('confirmed');
     } else {
-      setAuthError('Your payment was not completed. Please try again.');
+      setCheckoutError('Your payment was not completed and you were not charged. Please try again.');
       setView('cart');
     }
   }, []);
@@ -758,15 +783,21 @@ export default function App() {
     if (!stripeReturnOrderId || !authSession?.access_token) return;
 
     const orderId = stripeReturnOrderId;
+    const token = authSession.access_token;
     setStripeReturnOrderId(null);
 
     void (async () => {
-      try {
-        const order = await getOrderRequest(authSession.access_token, orderId);
-        setLatestOrder(order);
-        setTrackedOrderId(order.id);
-      } catch {
-        // best-effort — confirmed screen still shows without order details
+      // Retry: the payment succeeded, so a transient fetch failure must not
+      // leave the confirmation screen showing a $0.00 / "Pending" order.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          const order = await getOrderRequest(token, orderId);
+          setLatestOrder(order);
+          setTrackedOrderId(order.id);
+          break;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
       }
       setCartItems([]);
     })();
@@ -886,6 +917,36 @@ export default function App() {
     }
 
     window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    // Session ended (logout or expiry): drop the cart so the next user on this
+    // browser doesn't inherit it, and the local cache can't diverge from a (now
+    // absent) server cart and be charged at checkout.
+    setCartItems([]);
+    try {
+      window.localStorage.removeItem(CART_STORAGE_KEY);
+    } catch {
+      // localStorage unavailable — ignore.
+    }
+    isFirstCartSyncDoneRef.current = false;
+    initialTokenRef.current = null;
+  };
+
+  // One refresh at a time, shared by all concurrent callers.
+  const refreshSession = (): Promise<AuthResponse> => {
+    if (!refreshPromiseRef.current) {
+      const refreshToken = authSession?.refresh_token;
+      if (!refreshToken) {
+        return Promise.reject(new ApiError('Session expired. Please sign in again.', 401));
+      }
+      refreshPromiseRef.current = refreshTokenRequest(refreshToken)
+        .then((newSession) => {
+          persistSession(newSession);
+          return newSession;
+        })
+        .finally(() => {
+          refreshPromiseRef.current = null;
+        });
+    }
+    return refreshPromiseRef.current;
   };
 
   const callWithRefresh = async <T,>(fn: (token: string) => Promise<T>): Promise<T> => {
@@ -897,8 +958,7 @@ export default function App() {
     } catch (error) {
       if (error instanceof ApiError && error.status === 401 && authSession.refresh_token) {
         try {
-          const newSession = await refreshTokenRequest(authSession.refresh_token);
-          persistSession(newSession);
+          const newSession = await refreshSession();
           return await fn(newSession.access_token);
         } catch {
           persistSession(null);
@@ -908,6 +968,25 @@ export default function App() {
         }
       }
       throw error;
+    }
+  };
+
+  // Push an optimistic cart change to the server. Routes through callWithRefresh
+  // so an expired access token is refreshed and retried instead of silently
+  // failing — otherwise the local cart diverges from the server cart and the
+  // customer is charged for the server's version at checkout. On a hard failure
+  // we roll the optimistic change back so local and server stay identical.
+  const runCartSync = async (
+    call: (token: string) => Promise<unknown>,
+    rollback: () => void,
+  ): Promise<void> => {
+    if (!authSession?.access_token) return; // guest cart is local-only
+    try {
+      await callWithRefresh(call);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return; // session ended; callWithRefresh redirected
+      rollback();
+      setCheckoutError('We could not sync your cart. Please review it before checking out.');
     }
   };
 
@@ -1060,15 +1139,23 @@ export default function App() {
 
   const handlePaymentSuccess = async () => {
     if (!authSession?.access_token || !checkoutResponse) return;
-    try {
-      const order = await getOrderRequest(authSession.access_token, checkoutResponse.order_id);
-      setLatestOrder(order);
-      setTrackedOrderId(order.id);
-    } catch {
-      // best-effort — confirmed screen still shows without order details
-    }
+    const token = authSession.access_token;
+    const orderId = checkoutResponse.order_id;
     setCartItems([]);
     setView('confirmed');
+    // Payment already succeeded; retry so a transient fetch failure doesn't
+    // leave the confirmation screen without the order (it shows a graceful
+    // "finalizing" state until this resolves).
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const order = await getOrderRequest(token, orderId);
+        setLatestOrder(order);
+        setTrackedOrderId(order.id);
+        return;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
   };
 
   if (isMaintenance) {
@@ -1215,6 +1302,23 @@ export default function App() {
         )}
       </AnimatePresence>
       </>
+      )}
+
+      {checkoutError && view === 'cart' && (
+        <div className="fixed inset-x-0 top-0 z-[70] flex justify-center px-4 pt-4">
+          <div className="flex w-full max-w-2xl items-start gap-3 rounded-2xl border border-red-300 bg-red-50 px-5 py-4 shadow-xl">
+            <span className="mt-0.5 text-red-600">⚠</span>
+            <p className="flex-1 text-sm font-semibold text-red-700">{checkoutError}</p>
+            <button
+              type="button"
+              onClick={() => setCheckoutError(null)}
+              className="shrink-0 rounded-lg p-1 text-red-500 transition hover:bg-red-100"
+              aria-label="Dismiss"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
       )}
 
       <AnimatePresence mode="wait">
@@ -1442,16 +1546,21 @@ export default function App() {
               const item = cartItems.find((i) => i.variantId === variantId);
               if (!item) return;
               if (item.quantity <= 1) {
+                const removed = item;
                 setCartItems((prev) => prev.filter((i) => i.variantId !== variantId));
-                if (authSession?.access_token) {
-                  await removeCartItemRequest(authSession.access_token, variantId).catch(() => {});
-                }
+                await runCartSync(
+                  (token) => removeCartItemRequest(token, variantId),
+                  () => setCartItems((prev) =>
+                    prev.some((i) => i.variantId === variantId) ? prev : [...prev, removed]),
+                );
               } else {
-                const newQty = item.quantity - 1;
+                const prevQty = item.quantity;
+                const newQty = prevQty - 1;
                 setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: newQty } : i));
-                if (authSession?.access_token) {
-                  await updateCartItemRequest(authSession.access_token, variantId, newQty).catch(() => {});
-                }
+                await runCartSync(
+                  (token) => updateCartItemRequest(token, variantId, newQty),
+                  () => setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: prevQty } : i)),
+                );
               }
             }}
             onIncreaseQuantity={async (variantId) => {
@@ -1460,36 +1569,29 @@ export default function App() {
               const prevQty = item.quantity;
               const newQty = prevQty + 1;
               setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: newQty } : i));
-              if (authSession?.access_token) {
-                try {
-                  await updateCartItemRequest(authSession.access_token, variantId, newQty);
-                } catch (err) {
-                  setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: prevQty } : i));
-                  setNotification(err instanceof ApiError ? err.message : 'Could not update quantity');
-                  setTimeout(() => setNotification(null), 3000);
-                }
-              }
+              await runCartSync(
+                (token) => updateCartItemRequest(token, variantId, newQty),
+                () => setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: prevQty } : i)),
+              );
             }}
             onSetQuantity={async (variantId, qty) => {
               const item = cartItems.find((i) => i.variantId === variantId);
               const prevQty = item?.quantity ?? 1;
               const newQty = Math.max(1, qty);
               setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: newQty } : i));
-              if (authSession?.access_token) {
-                try {
-                  await updateCartItemRequest(authSession.access_token, variantId, newQty);
-                } catch (err) {
-                  setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: prevQty } : i));
-                  setNotification(err instanceof ApiError ? err.message : 'Could not update quantity');
-                  setTimeout(() => setNotification(null), 3000);
-                }
-              }
+              await runCartSync(
+                (token) => updateCartItemRequest(token, variantId, newQty),
+                () => setCartItems((prev) => prev.map((i) => i.variantId === variantId ? { ...i, quantity: prevQty } : i)),
+              );
             }}
             onRemoveItem={async (variantId) => {
+              const removed = cartItems.find((i) => i.variantId === variantId);
               setCartItems((prev) => prev.filter((i) => i.variantId !== variantId));
-              if (authSession?.access_token) {
-                await removeCartItemRequest(authSession.access_token, variantId).catch(() => {});
-              }
+              await runCartSync(
+                (token) => removeCartItemRequest(token, variantId),
+                () => { if (removed) setCartItems((prev) =>
+                  prev.some((i) => i.variantId === variantId) ? prev : [...prev, removed]); },
+              );
             }}
             onSaveItem={async (variantId) => {
               if (!authSession?.access_token) return;
@@ -3097,6 +3199,10 @@ function OrderConfirmedView({
   // success message. Once the webhook moves the order to `processing` (or any
   // later state) we switch to the regular confirmation view.
   const isAwaitingPaymentConfirmation = order?.status === 'confirmed';
+  // Payment succeeded but we couldn't load the order (transient fetch failure).
+  // Show a reassuring "finalizing" state instead of a $0.00 / empty summary.
+  const isFinalizing = order === null;
+  const isPending = isFinalizing || isAwaitingPaymentConfirmation;
 
   return (
     <motion.div
@@ -3116,18 +3222,20 @@ function OrderConfirmedView({
           <section className="pt-8">
             <div className="mb-10 flex h-28 w-28 items-center justify-center rounded-full bg-[#deeef7] shadow-[0_0_40px_rgba(31,109,173,0.15)]">
               <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] text-white shadow-[0_8px_20px_rgba(13,77,138,0.3)]">
-                {isAwaitingPaymentConfirmation ? <LoaderCircle size={32} className="animate-spin" /> : <Check size={32} />}
+                {isPending ? <LoaderCircle size={32} className="animate-spin" /> : <Check size={32} />}
               </div>
             </div>
 
             <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.14em] text-[#5c95bd]">
-              {isAwaitingPaymentConfirmation ? 'Order Placed' : 'Purchase Complete'}
+              {isPending ? 'Payment Received' : 'Purchase Complete'}
             </span>
             <h1 className="text-5xl font-black uppercase tracking-[-0.08em] text-[#1f6dad] md:text-7xl md:leading-none">
-              {isAwaitingPaymentConfirmation ? 'Awaiting confirmation.' : 'Order Confirmed.'}
+              {isPending ? 'Almost there.' : 'Order Confirmed.'}
             </h1>
             <p className="mt-6 max-w-3xl text-[20px] italic leading-relaxed text-[#5d95bc]">
-              {isAwaitingPaymentConfirmation
+              {isFinalizing
+                ? "Your payment went through. We're finalizing your order details now and will email your receipt shortly — you can safely leave this page."
+                : isAwaitingPaymentConfirmation
                 ? "Your order is registered and we're waiting for the payment processor to confirm it. You'll receive a receipt by email once the payment is verified — usually within a few seconds."
                 : "Your high-performance setup is now in the queue. We've sent a detailed receipt to your registered email address."}
             </p>
@@ -3196,20 +3304,28 @@ function OrderConfirmedView({
               ))}
             </div>
 
-            <div className="my-6 border-t border-[#c4dcec]"></div>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-4"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Subtotal</span><span className="text-[15px] font-black text-[#1f6dad]">{formatCurrency(subtotal)}</span></div>
-              <div className="flex items-center justify-between gap-4"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Shipping</span><span className="text-[15px] font-black text-[#1f6dad]">{formatCurrency(shippingCost)}</span></div>
-              <div className="flex items-center justify-between gap-4"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Tax (EST)</span><span className="text-[15px] font-black text-[#1f6dad]">{formatCurrency(tax)}</span></div>
-            </div>
-            <div className="my-6 border-t border-[#7eb7db]"></div>
-            <div className="flex items-end justify-between gap-4">
-              <span className="text-[20px] font-black uppercase tracking-[0.06em] text-[#5c95bd]">Total</span>
-              <div className="text-right">
-                <div className="text-[44px] font-black tracking-[-0.08em] leading-none text-[#1f6dad] md:text-[56px]">{formatCurrency(total)}</div>
-                <div className="mt-2 text-[12px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Including VAT</div>
-              </div>
-            </div>
+            {isFinalizing ? (
+              <p className="rounded-[14px] bg-[#eaf3fb] px-5 py-4 text-[14px] font-semibold text-[#1f6dad]">
+                We're finalizing your order — the full summary and receipt will be emailed to you.
+              </p>
+            ) : (
+              <>
+                <div className="my-6 border-t border-[#c4dcec]"></div>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-4"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Subtotal</span><span className="text-[15px] font-black text-[#1f6dad]">{formatCurrency(subtotal)}</span></div>
+                  <div className="flex items-center justify-between gap-4"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Shipping</span><span className="text-[15px] font-black text-[#1f6dad]">{formatCurrency(shippingCost)}</span></div>
+                  <div className="flex items-center justify-between gap-4"><span className="text-[14px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Tax (EST)</span><span className="text-[15px] font-black text-[#1f6dad]">{formatCurrency(tax)}</span></div>
+                </div>
+                <div className="my-6 border-t border-[#7eb7db]"></div>
+                <div className="flex items-end justify-between gap-4">
+                  <span className="text-[20px] font-black uppercase tracking-[0.06em] text-[#5c95bd]">Total</span>
+                  <div className="text-right">
+                    <div className="text-[44px] font-black tracking-[-0.08em] leading-none text-[#1f6dad] md:text-[56px]">{formatCurrency(total)}</div>
+                    <div className="mt-2 text-[12px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Including VAT</div>
+                  </div>
+                </div>
+              </>
+            )}
 
             <div className="mt-8 border-t border-[#c4dcec] pt-6">
               <div className="flex items-start gap-3">
@@ -3612,7 +3728,7 @@ function ProductDetailView({
 
   usePageMeta({
     title: apiProduct?.name ?? '',
-    description: productDescription,
+    description: productDescription ?? undefined,
     ogImage: heroImage ?? undefined,
   });
 
@@ -3889,7 +4005,7 @@ function ProductDetailView({
                   className="rounded-[18px] border border-[#7eb7db] bg-[linear-gradient(180deg,#ffffff_0%,#ffffff_63%,#71b2db_63%,#75b3db_100%)] p-4 text-left shadow-[0_16px_30px_rgba(107,154,187,0.16)] transition-all hover:-translate-y-1 hover:shadow-[0_20px_36px_rgba(107,154,187,0.2)]"
                 >
                   <div className="aspect-[0.92/0.86] overflow-hidden rounded-[12px] border border-[#d6e4ec] bg-white">
-                    <img src={related.img} alt={related.name} className="h-full w-full object-contain p-3" referrerPolicy="no-referrer" />
+                    <img src={related.img ?? undefined} alt={related.name} className="h-full w-full object-contain p-3" referrerPolicy="no-referrer" />
                   </div>
                   <div className="mt-4">
                     <h3 className="text-[22px] font-black tracking-[-0.04em] text-white">{related.name}</h3>
@@ -4714,9 +4830,19 @@ function Home({ products, onShopClick, onProductSelect }: { products: Product[];
           </div>
 
           <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-            {(categoryCards.length > 0 ? categoryCards : bestSellers).map((card) => (
+            {(categoryCards.length > 0 ? categoryCards : bestSellers).map((raw) => {
+              // categoryCards and bestSellers (Product[]) have different shapes;
+              // normalise to a common card so the JSX below is type-safe.
+              const card = {
+                key: 'key' in raw ? raw.key : raw.id,
+                slug: raw.slug,
+                img: raw.img,
+                title: 'title' in raw ? raw.title : raw.name,
+                desc: 'desc' in raw ? raw.desc : raw.description,
+              };
+              return (
               <button
-                key={card.key ?? card.id}
+                key={card.key}
                 type="button"
                 onClick={() => onProductSelect(card.slug)}
                 className="group rounded-[28px] border border-white/40 bg-[linear-gradient(180deg,#8ec3e8_0%,#9fd2ee_100%)] p-5 text-left shadow-[0_22px_45px_rgba(59,109,151,0.18)] transition-transform hover:-translate-y-1"
@@ -4725,7 +4851,7 @@ function Home({ products, onShopClick, onProductSelect }: { products: Product[];
                   <div className="aspect-square overflow-hidden rounded-[16px] bg-white">
                     {card.img ? (
                       <img
-                        alt={card.title ?? card.name}
+                        alt={card.title}
                         className="h-full w-full object-contain transition-transform duration-500 group-hover:scale-105"
                         src={card.img}
                         referrerPolicy="no-referrer"
@@ -4737,15 +4863,16 @@ function Home({ products, onShopClick, onProductSelect }: { products: Product[];
                     )}
                   </div>
                 </div>
-                <h3 className="mt-4 text-xl font-black tracking-[-0.04em] text-white">{card.title ?? card.name}</h3>
+                <h3 className="mt-4 text-xl font-black tracking-[-0.04em] text-white">{card.title}</h3>
                 <p className="mt-2 line-clamp-2 text-sm leading-6 text-[#eef8ff]">
-                  {card.desc ?? card.description ?? 'Precision-engineered components for modern infrastructure environments.'}
+                  {card.desc ?? 'Precision-engineered components for modern infrastructure environments.'}
                 </p>
                 <div className="mt-4 inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.22em] text-[#123c67]">
                   View More <ArrowRight size={14} />
                 </div>
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>
@@ -7146,28 +7273,46 @@ function Support() {
 
           <div className="grid grid-cols-1 items-start gap-10 xl:grid-cols-[minmax(0,1.28fr)_420px] xl:gap-18">
             <div className="rounded-[18px] bg-[linear-gradient(90deg,#64add9_0%,#73b4db_100%)] p-6 shadow-[0_20px_50px_rgba(95,168,215,0.24)] md:p-11">
-              <div className="grid grid-cols-1 gap-6">
+              <form
+                className="grid grid-cols-1 gap-6"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const data = new FormData(event.currentTarget);
+                  const name = String(data.get('name') || '').trim();
+                  const email = String(data.get('email') || '').trim();
+                  const message = String(data.get('message') || '').trim();
+                  const subject = encodeURIComponent(`Support request${name ? ` from ${name}` : ''}`);
+                  const body = encodeURIComponent(`${message}\n\n— ${name}${email ? ` (${email})` : ''}`);
+                  window.location.href = `mailto:sales@havtel.com?subject=${subject}&body=${body}`;
+                }}
+              >
                 <label className="block">
-                  <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.08em] text-white">Full Identity</span>
+                  <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.08em] text-white">Name</span>
                   <input
                     type="text"
+                    name="name"
+                    required
                     placeholder="Enter your name"
                     className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(180deg,#fffefb_0%,#fbfbfd_100%)] px-6 py-5 text-[17px] text-[#1f5078] shadow-[0_8px_20px_rgba(22,71,104,0.18)] outline-none placeholder:text-[#5c85a2] focus:border-[#8dbbda]"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.08em] text-white">Digital Coordinates</span>
+                  <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.08em] text-white">Email</span>
                   <input
                     type="email"
+                    name="email"
+                    required
                     placeholder="email@address.com"
                     className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(180deg,#fffefb_0%,#fbfbfd_100%)] px-6 py-5 text-[17px] text-[#1f5078] shadow-[0_8px_20px_rgba(22,71,104,0.18)] outline-none placeholder:text-[#5c85a2] focus:border-[#8dbbda]"
                   />
                 </label>
 
                 <label className="block">
-                  <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.08em] text-white">Digital Coordinates</span>
+                  <span className="mb-4 block text-[12px] font-black uppercase tracking-[0.08em] text-white">Message</span>
                   <textarea
+                    name="message"
+                    required
                     placeholder="How may we assist you today?"
                     rows={7}
                     className="w-full resize-none rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(180deg,#fffefb_0%,#fbfbfd_100%)] px-6 py-5 text-[17px] text-[#1f5078] shadow-[0_8px_20px_rgba(22,71,104,0.18)] outline-none placeholder:text-[#5c85a2] focus:border-[#8dbbda]"
@@ -7175,12 +7320,12 @@ function Support() {
                 </label>
 
                 <div className="pt-1">
-                  <button className="inline-flex items-center gap-2 rounded-[12px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-8 py-4 text-[16px] font-black text-white shadow-[0_14px_30px_rgba(13,77,138,0.24)] transition-transform hover:scale-[1.01]">
+                  <button type="submit" className="inline-flex items-center gap-2 rounded-[12px] bg-[linear-gradient(90deg,#0f5ca0_0%,#1d6ea9_100%)] px-8 py-4 text-[16px] font-black text-white shadow-[0_14px_30px_rgba(13,77,138,0.24)] transition-transform hover:scale-[1.01]">
                     Send Message
                     <ArrowRight size={20} />
                   </button>
                 </div>
-              </div>
+              </form>
             </div>
 
             <div className="space-y-6 pt-[2px]">
