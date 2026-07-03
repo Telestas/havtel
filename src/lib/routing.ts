@@ -2,7 +2,7 @@ export type View =
   | 'home' | 'shop' | 'support' | 'account' | 'orders'
   | 'cart' | 'shipping' | 'payment' | 'confirmed'
   | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot' | 'reset'
-  | 'privacy' | 'terms';
+  | 'preorder' | 'privacy' | 'terms';
 
 export type RouteSnapshot = {
   view: View;
@@ -36,6 +36,7 @@ export const getRouteSnapshotFromPath = (pathname: string): RouteSnapshot => {
     case '/account':             return { view: 'account',   productSlug: null, trackedOrderId: null };
     case '/orders':              return { view: 'orders',    productSlug: null, trackedOrderId: null };
     case '/cart':                return { view: 'cart',      productSlug: null, trackedOrderId: null };
+    case '/preorder':            return { view: 'preorder',  productSlug: null, trackedOrderId: null };
     case '/checkout/shipping':   return { view: 'shipping',  productSlug: null, trackedOrderId: null };
     case '/checkout/payment':
     case '/checkout/review':     return { view: 'payment',   productSlug: null, trackedOrderId: null };
@@ -60,6 +61,7 @@ export const buildPathFromRoute = ({ view, productSlug, trackedOrderId }: RouteS
     case 'account':   return '/account';
     case 'orders':    return '/orders';
     case 'cart':      return '/cart';
+    case 'preorder':  return '/preorder';
     case 'shipping':  return '/checkout/shipping';
     case 'payment':   return '/checkout/payment';
     case 'confirmed': return '/checkout/confirmed';

@@ -106,7 +106,16 @@ import {
   type Reservation,
 } from './lib/api';
 
-type View = 'home' | 'shop' | 'support' | 'account' | 'orders' | 'cart' | 'shipping' | 'payment' | 'confirmed' | 'tracking' | 'product' | 'notfound' | 'login' | 'signup' | 'forgot' | 'reset' | 'preorder' | 'privacy' | 'terms';
+// Routing lives in ./lib/routing (single source of truth). App.tsx previously
+// kept a divergent copy of these tables that was missing /reset-password,
+// /privacy-policy and /terms-of-use — sending those links to the 404 page.
+import {
+  type View,
+  type RouteSnapshot,
+  normalizePath,
+  getRouteSnapshotFromPath,
+  buildPathFromRoute,
+} from './lib/routing';
 
 const PAGE_META: Partial<Record<View, { title: string; description: string }>> = {
   home:     { title: 'Havtel',    description: 'Premium tech hardware — servers, networking gear, and more.' },
@@ -313,127 +322,12 @@ function CheckoutHeader({
   );
 }
 
-type RouteSnapshot = {
-  view: View;
-  productSlug: string | null;
-  trackedOrderId: string | null;
-};
-
-const normalizePath = (pathname: string) => {
-  if (!pathname || pathname === '/') {
-    return '/';
-  }
-
-  const trimmed = pathname.replace(/\/+$/, '');
-  return trimmed || '/';
-};
-
-const getRouteSnapshotFromPath = (pathname: string): RouteSnapshot => {
-  const path = normalizePath(pathname);
-  const productMatch = path.match(/^\/product\/([^/]+)$/);
-  if (productMatch) {
-    return {
-      view: 'product',
-      productSlug: decodeURIComponent(productMatch[1]),
-      trackedOrderId: null,
-    };
-  }
-
-  const trackingMatch = path.match(/^\/tracking\/([^/]+)$/);
-  if (trackingMatch) {
-    return {
-      view: 'tracking',
-      productSlug: null,
-      trackedOrderId: decodeURIComponent(trackingMatch[1]),
-    };
-  }
-
-  switch (path) {
-    case '/':
-      return { view: 'home', productSlug: null, trackedOrderId: null };
-    case '/store':
-      return { view: 'shop', productSlug: null, trackedOrderId: null };
-    case '/support':
-      return { view: 'support', productSlug: null, trackedOrderId: null };
-    case '/account':
-      return { view: 'account', productSlug: null, trackedOrderId: null };
-    case '/orders':
-      return { view: 'orders', productSlug: null, trackedOrderId: null };
-    case '/cart':
-      return { view: 'cart', productSlug: null, trackedOrderId: null };
-    case '/preorder':
-      return { view: 'preorder', productSlug: null, trackedOrderId: null };
-    case '/checkout/shipping':
-      return { view: 'shipping', productSlug: null, trackedOrderId: null };
-    case '/checkout/payment':
-    case '/checkout/review':
-      return { view: 'payment', productSlug: null, trackedOrderId: null };
-    case '/checkout/confirmed':
-      return { view: 'confirmed', productSlug: null, trackedOrderId: null };
-    case '/tracking':
-      return { view: 'tracking', productSlug: null, trackedOrderId: null };
-    case '/login':
-      return { view: 'login', productSlug: null, trackedOrderId: null };
-    case '/signup':
-      return { view: 'signup', productSlug: null, trackedOrderId: null };
-    case '/forgot-password':
-      return { view: 'forgot', productSlug: null, trackedOrderId: null };
-    case '/404':
-      return { view: 'notfound', productSlug: null, trackedOrderId: null };
-    default:
-      return { view: 'notfound', productSlug: null, trackedOrderId: null };
-  }
-};
-
 const getCurrentRouteSnapshot = (): RouteSnapshot => {
   if (typeof window === 'undefined') {
     return { view: 'home', productSlug: null, trackedOrderId: null };
   }
 
   return getRouteSnapshotFromPath(window.location.pathname);
-};
-
-const buildPathFromRoute = ({
-  view,
-  productSlug,
-  trackedOrderId,
-}: RouteSnapshot): string => {
-  switch (view) {
-    case 'home':
-      return '/';
-    case 'shop':
-      return '/store';
-    case 'support':
-      return '/support';
-    case 'account':
-      return '/account';
-    case 'orders':
-      return '/orders';
-    case 'cart':
-      return '/cart';
-    case 'preorder':
-      return '/preorder';
-    case 'shipping':
-      return '/checkout/shipping';
-    case 'payment':
-      return '/checkout/payment';
-    case 'confirmed':
-      return '/checkout/confirmed';
-    case 'tracking':
-      return trackedOrderId ? `/tracking/${encodeURIComponent(trackedOrderId)}` : '/tracking';
-    case 'product':
-      return productSlug ? `/product/${encodeURIComponent(productSlug)}` : '/store';
-    case 'login':
-      return '/login';
-    case 'signup':
-      return '/signup';
-    case 'forgot':
-      return '/forgot-password';
-    case 'notfound':
-      return '/404';
-    default:
-      return '/';
-  }
 };
 
 function mapApiProductToLocal(
@@ -1154,7 +1048,7 @@ export default function App() {
         // handled by callWithRefresh
       } else if (error instanceof ApiError && error.status === 400 && error.message === 'Cart is empty') {
         setCartItems([]);
-        setView('bag');
+        setView('cart');
         setAuthError('Your cart is empty. Please add items before checking out.');
       } else {
         setAuthError(error instanceof ApiError ? error.message : 'Unable to process your order right now.');
@@ -2219,6 +2113,14 @@ function ShippingView({
   const [formError, setFormError] = useState<string | null>(null);
   const [isQuoting, setIsQuoting] = useState(false);
 
+  // Editable checkout fields. Dark text on white (the old read-only tiles put
+  // white text on a light-blue tile — invisible, and there was no way to type
+  // an address at all for a first-time buyer without a saved contact).
+  const fieldInputClass =
+    'w-full rounded-[14px] border border-[#d6e4ec] bg-white px-6 py-5 text-xl font-bold text-[#1f4c74] shadow-[0_10px_24px_rgba(107,154,187,0.12)] outline-none transition focus:border-[#1f6dad]';
+  const updateField = (key: keyof CheckoutShippingAddress) => (value: string) =>
+    setShippingForm((prev) => ({ ...prev, [key]: value }));
+
   const validateShippingForm = (): boolean => {
     const f = shippingForm;
     const firstNameErr = validateName(f.firstName);
@@ -2560,16 +2462,26 @@ function ShippingView({
                 </div>
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                   <div>
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Email Address</span>
-                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                      {shippingForm.email || '—'}
-                    </div>
+                    <label className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Email Address</label>
+                    <input
+                      type="email"
+                      autoComplete="email"
+                      className={fieldInputClass}
+                      placeholder="you@example.com"
+                      value={shippingForm.email}
+                      onChange={(e) => updateField('email')(e.target.value)}
+                    />
                   </div>
                   <div>
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Phone Number</span>
-                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                      {shippingForm.phone || '—'}
-                    </div>
+                    <label className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Phone Number</label>
+                    <input
+                      type="tel"
+                      autoComplete="tel"
+                      className={fieldInputClass}
+                      placeholder="+1 305 555 0100"
+                      value={shippingForm.phone}
+                      onChange={(e) => updateField('phone')(e.target.value)}
+                    />
                   </div>
                 </div>
               </div>
@@ -2581,46 +2493,83 @@ function ShippingView({
                 </div>
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                   <div>
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">First Name</span>
-                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                      {shippingForm.firstName || '—'}
-                    </div>
+                    <label className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">First Name</label>
+                    <input
+                      type="text"
+                      autoComplete="given-name"
+                      className={fieldInputClass}
+                      placeholder="Jane"
+                      value={shippingForm.firstName}
+                      onChange={(e) => updateField('firstName')(e.target.value)}
+                    />
                   </div>
                   <div>
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Last Name</span>
-                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                      {shippingForm.lastName || '—'}
-                    </div>
+                    <label className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Last Name</label>
+                    <input
+                      type="text"
+                      autoComplete="family-name"
+                      className={fieldInputClass}
+                      placeholder="Doe"
+                      value={shippingForm.lastName}
+                      onChange={(e) => updateField('lastName')(e.target.value)}
+                    />
                   </div>
                   <div className="md:col-span-2">
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Street Address</span>
-                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                      {shippingForm.street || '—'}
-                    </div>
+                    <label className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Street Address</label>
+                    <input
+                      type="text"
+                      autoComplete="street-address"
+                      className={fieldInputClass}
+                      placeholder="123 Main St, Apt 4"
+                      value={shippingForm.street}
+                      onChange={(e) => updateField('street')(e.target.value)}
+                    />
                   </div>
                   <div>
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">City</span>
-                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                      {shippingForm.city || '—'}
-                    </div>
+                    <label className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">City</label>
+                    <input
+                      type="text"
+                      autoComplete="address-level2"
+                      className={fieldInputClass}
+                      placeholder="Miami"
+                      value={shippingForm.city}
+                      onChange={(e) => updateField('city')(e.target.value)}
+                    />
                   </div>
                   <div>
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">State / Province</span>
-                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                      {shippingForm.state || '—'}
-                    </div>
+                    <label className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">State / Province</label>
+                    <input
+                      type="text"
+                      autoComplete="address-level1"
+                      className={fieldInputClass}
+                      placeholder="FL"
+                      value={shippingForm.state === 'N/A' ? '' : shippingForm.state}
+                      onChange={(e) => updateField('state')(e.target.value)}
+                    />
                   </div>
                   <div>
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Postal Code</span>
-                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                      {shippingForm.postalCode || '—'}
-                    </div>
+                    <label className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Postal Code</label>
+                    <input
+                      type="text"
+                      autoComplete="postal-code"
+                      className={fieldInputClass}
+                      placeholder="33122"
+                      value={shippingForm.postalCode === 'N/A' ? '' : shippingForm.postalCode}
+                      onChange={(e) => updateField('postalCode')(e.target.value)}
+                    />
                   </div>
                   <div>
-                    <span className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Country</span>
-                    <div className="w-full rounded-[14px] border border-[#d6e4ec] bg-[linear-gradient(90deg,#bfdcf0_0%,#d1e7f5_100%)] px-6 py-5 text-xl font-bold text-white shadow-[0_10px_24px_rgba(107,154,187,0.12)]">
-                      {(PARSED_COUNTRIES.find((p) => p.iso2 === shippingForm.country)?.name ?? shippingForm.country) || '—'}
-                    </div>
+                    <label className="mb-4 block text-[13px] font-black uppercase tracking-[0.08em] text-[#5c95bd]">Country</label>
+                    <select
+                      autoComplete="country"
+                      className={fieldInputClass}
+                      value={shippingForm.country}
+                      onChange={(e) => updateField('country')(e.target.value)}
+                    >
+                      {PARSED_COUNTRIES.map((c) => (
+                        <option key={c.iso2} value={c.iso2}>{c.name}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               </div>
