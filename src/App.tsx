@@ -2864,18 +2864,12 @@ function ShippingView({
                 </div>
                 <div>
                   <div className="text-xl font-black">Encrypted Transaction</div>
-                  <div className="mt-1 text-sm text-white/85">Havtel Secure Gate v2.4 Active</div>
+                  <div className="mt-1 text-sm text-white/85">Payments processed securely by Stripe</div>
                 </div>
               </div>
             </div>
 
-            <div className="relative overflow-hidden rounded-[22px] min-h-[250px] bg-[#c9e2f0] shadow-[0_16px_30px_rgba(107,154,187,0.16)]">
-              <img
-                src="https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=80"
-                alt="Hardware ecosystem"
-                className="absolute inset-0 h-full w-full object-cover opacity-80"
-                referrerPolicy="no-referrer"
-              />
+            <div className="relative overflow-hidden rounded-[22px] min-h-[250px] bg-[linear-gradient(180deg,#8ec4e3_0%,#5f95bc_100%)] shadow-[0_16px_30px_rgba(107,154,187,0.16)]">
               <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(95,149,188,0.12),rgba(15,65,101,0.45))]"></div>
               <div className="absolute bottom-6 left-6 text-sm font-black uppercase tracking-[0.18em] text-white">
                 Hardware Ecosystem
@@ -2984,7 +2978,7 @@ function StripePaymentForm({ total, onPaymentSuccess }: { total: number; onPayme
             <ShieldCheck size={16} />
           </div>
           <p className="text-[15px] leading-relaxed text-white">
-            Secure checkout with AES-256 encryption. Your payment information is never stored on our servers.
+            Secure checkout powered by Stripe. Your card details are encrypted in transit and never stored on our servers.
           </p>
         </div>
       </div>
@@ -4066,13 +4060,6 @@ function NotFoundView({ onGoHome }: { onGoHome: () => void; key?: string }) {
               type="button"
               onClick={onGoHome}
               className="rounded-[22px] bg-gradient-to-r from-[#a9c7ff] to-[#4d93f7] px-10 py-6 text-xl font-bold text-[#03192f] shadow-[0_24px_60px_rgba(77,147,247,0.35)]"
-            >
-              Return Home
-            </button>
-            <button
-              type="button"
-              onClick={onGoHome}
-              className="rounded-[22px] border border-white/10 px-10 py-6 text-xl font-bold text-[#b9d1ff] transition-colors hover:bg-white/5"
             >
               Return Home
             </button>
