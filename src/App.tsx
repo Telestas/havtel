@@ -127,7 +127,7 @@ const PAGE_META: Partial<Record<View, { title: string; description: string }>> =
   shipping: { title: 'Checkout',  description: '' },
   payment:  { title: 'Payment',   description: '' },
   privacy:  { title: 'Privacy Policy', description: 'How Havtel Corp collects, uses, and protects your personal information.' },
-  terms:    { title: 'Terms of Use',   description: 'Terms governing the use of www.nitrotelmanufacturing.com.' },
+  terms:    { title: 'Terms of Use',   description: 'Terms governing the use of store.havtel.com.' },
 };
 
 function navigateToPath(href: string) {
@@ -6739,7 +6739,7 @@ function LegalDocumentLayout({
             <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-[12px] font-bold uppercase tracking-[0.14em] text-[#1f5078]/70">
               <span>Effective {effectiveDate}</span>
               <span>Havtel Corp · DBA Nitrotel Manufacturing</span>
-              <span>4626 SW 147th Ct, Miami, FL 33185</span>
+              <span>2531 NW 72nd Ave unit A, Miami, FL 33122</span>
             </div>
           </div>
 
@@ -6797,7 +6797,7 @@ function PrivacyPolicy() {
       title: 'Who We Are',
       body: (
         <p>
-          Havtel Corp (&quot;we&quot;, &quot;our&quot;, the &quot;Company&quot;) operates www.nitrotelmanufacturing.com.
+          Havtel Corp (&quot;we&quot;, &quot;our&quot;, the &quot;Company&quot;) operates store.havtel.com.
           This policy describes what personal data we collect, how we use it, with whom we share it, and the rights
           you have under CCPA/CPRA, VCDPA, CTDPA, CPA, UCPA, FDBR, and other applicable state laws.
         </p>
@@ -6889,8 +6889,8 @@ function PrivacyPolicy() {
             <li><strong>Appeal</strong> denials (VA, CT, CO).</li>
           </ul>
           <p>
-            To exercise rights: email <a href="mailto:sales@nitrotelmanufacturing.com">sales@nitrotelmanufacturing.com</a> or
-            use the form at www.nitrotelmanufacturing.com/privacy-request. We will verify your identity before processing.
+            To exercise rights: email <a href="mailto:sales@havtel.com">sales@havtel.com</a> or
+            use the form at store.havtel.com/privacy-request. We will verify your identity before processing.
             Response time: 45 days (extendable 45 additional days with notice).
           </p>
         </>
@@ -6971,7 +6971,7 @@ function PrivacyPolicy() {
       body: (
         <p>
           California residents may request once a year free disclosure of information shared with third parties for
-          direct marketing by emailing <a href="mailto:sales@nitrotelmanufacturing.com">sales@nitrotelmanufacturing.com</a>.
+          direct marketing by emailing <a href="mailto:sales@havtel.com">sales@havtel.com</a>.
         </p>
       ),
     },
@@ -6993,8 +6993,8 @@ function PrivacyPolicy() {
       body: (
         <p>
           Havtel Corp — Privacy Office<br />
-          4626 SW 147th Ct, Miami, FL 33185<br />
-          <a href="mailto:sales@nitrotelmanufacturing.com">sales@nitrotelmanufacturing.com</a> · (786) 409-3741
+          2531 NW 72nd Ave unit A, Miami, FL 33122<br />
+          <a href="mailto:sales@havtel.com">sales@havtel.com</a> · 786-332-4868
         </p>
       ),
     },
@@ -7019,7 +7019,7 @@ function TermsOfUse() {
       title: 'Acceptance of Terms',
       body: (
         <p>
-          By accessing, browsing, or making a purchase on www.nitrotelmanufacturing.com (the &quot;Site&quot;), you
+          By accessing, browsing, or making a purchase on store.havtel.com (the &quot;Site&quot;), you
           represent that you have read, understood, and agree to be legally bound by these Terms of Use (the
           &quot;Terms&quot;), our Privacy Policy, and all referenced policies. If you do not agree, do not use the Site.
         </p>
@@ -7200,7 +7200,7 @@ function TermsOfUse() {
           <p>
             <strong>Exceptions:</strong> claims under USD $10,000 may be brought in small claims court; intellectual property claims may be
             litigated in federal courts. You may opt out of arbitration by sending written notice to{' '}
-            <a href="mailto:sales@nitrotelmanufacturing.com">sales@nitrotelmanufacturing.com</a> within 30 days of accepting these Terms.
+            <a href="mailto:sales@havtel.com">sales@havtel.com</a> within 30 days of accepting these Terms.
           </p>
         </>
       ),
@@ -7247,8 +7247,8 @@ function TermsOfUse() {
       body: (
         <p>
           Havtel Corp<br />
-          4626 SW 147th Ct, Miami, FL 33185<br />
-          <a href="mailto:sales@nitrotelmanufacturing.com">sales@nitrotelmanufacturing.com</a> · (786) 409-3741
+          2531 NW 72nd Ave unit A, Miami, FL 33122<br />
+          <a href="mailto:sales@havtel.com">sales@havtel.com</a> · 786-332-4868
         </p>
       ),
     },
@@ -7258,7 +7258,7 @@ function TermsOfUse() {
     <LegalDocumentLayout
       eyebrow="Legal Document"
       title="Terms of Use"
-      intro="The terms governing your use of www.nitrotelmanufacturing.com — including orders, payment, intellectual property, dispute resolution, and limitations of liability."
+      intro="The terms governing your use of store.havtel.com — including orders, payment, intellectual property, dispute resolution, and limitations of liability."
       effectiveDate="May 1, 2026"
       sections={sections}
     />
