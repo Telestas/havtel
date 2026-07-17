@@ -28,6 +28,8 @@ There is no ESLint/Prettier step — `lint` is purely `tsc --noEmit`. The Vite `
 
 Single-file SPA: `src/App.tsx` holds the whole application, `src/main.tsx` is the entry point. Connects to the API at `http://localhost:8000/api/v1` by default.
 
+Stripe's publishable key is fetched at runtime from `GET /api/v1/payments/config` (`getStripe()` in `App.tsx`, memoized) rather than baked in at build time — it's admin-configurable from the backoffice (Settings → Payments), so rotating it needs no rebuild/redeploy of this app.
+
 Form validation is custom throughout (not native `required`) — name/apellido rejects digits, phone requires international format with a 7-digit minimum, address fields carry inline per-field error messages. Match this pattern rather than reaching for native HTML validation or a form library when touching forms.
 
 Auth: JWT with automatic refresh-token rotation.

@@ -58,10 +58,12 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs: [test]
-    # The frontend bakes its API base URL and Stripe publishable key at build
-    # time, so a single image only works for one environment. We run the build
-    # twice — once per env — using a matrix so each environment gets its own
-    # image tagged with an `{env}-` prefix.
+    # The frontend bakes its API base URL at build time, so a single image only
+    # works for one environment. We run the build twice — once per env — using
+    # a matrix so each environment gets its own image tagged with an `{env}-`
+    # prefix. The Stripe publishable key is NOT baked in: it's fetched at
+    # runtime from GET /api/v1/payments/config, admin-configurable from the
+    # backoffice, so it needs no build arg here.
     strategy:
       fail-fast: false
       matrix:
@@ -99,31 +101,19 @@ jobs:
           MATRIX_ENV: ${{ matrix.env }}
           VITE_API_BASE_URL_DEV: ${{ vars.VITE_API_BASE_URL_DEV }}
           VITE_API_BASE_URL_PROD: ${{ vars.VITE_API_BASE_URL_PROD }}
-          VITE_STRIPE_PUBLISHABLE_KEY_DEV: ${{ vars.VITE_STRIPE_PUBLISHABLE_KEY_DEV }}
-          VITE_STRIPE_PUBLISHABLE_KEY_PROD: ${{ vars.VITE_STRIPE_PUBLISHABLE_KEY_PROD }}
         run: |
           if [ "$MATRIX_ENV" = "dev" ]; then
             API_BASE_URL="$VITE_API_BASE_URL_DEV"
-            STRIPE_KEY="$VITE_STRIPE_PUBLISHABLE_KEY_DEV"
           else
             API_BASE_URL="$VITE_API_BASE_URL_PROD"
-            STRIPE_KEY="$VITE_STRIPE_PUBLISHABLE_KEY_PROD"
           fi
 
           if [ -z "$API_BASE_URL" ]; then
             echo "VITE_API_BASE_URL_${MATRIX_ENV^^} is empty or not configured in repository variables."
             exit 1
           fi
-          if [ -z "$STRIPE_KEY" ]; then
-            echo "VITE_STRIPE_PUBLISHABLE_KEY_${MATRIX_ENV^^} is empty or not configured in repository variables."
-            exit 1
-          fi
 
-          # Mask the publishable key in logs even though it's a public key —
-          # cleaner output and prevents accidental copy-paste.
-          echo "::add-mask::$STRIPE_KEY"
           echo "api_base_url=$API_BASE_URL" >> "$GITHUB_OUTPUT"
-          echo "stripe_key=$STRIPE_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Compute image names
         env:
@@ -161,7 +151,6 @@ jobs:
           push: true
           build-args: |
             VITE_API_BASE_URL=${{ steps.vars.outputs.api_base_url }}
-            VITE_STRIPE_PUBLISHABLE_KEY=${{ steps.vars.outputs.stripe_key }}
           tags: |
             ${{ env.IMAGE_NAME }}:${{ env.CHANNEL_TAG }}
             ${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}

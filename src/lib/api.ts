@@ -534,6 +534,12 @@ export async function checkoutRequest(
   });
 }
 
+export type PaymentConfig = { stripe_publishable_key: string };
+
+export async function getPaymentConfigRequest(): Promise<PaymentConfig> {
+  return apiRequest<PaymentConfig>('/api/v1/payments/config');
+}
+
 export async function fetchMaintenanceStatus(): Promise<boolean> {
   try {
     const requestUrl = API_BASE_URL ? `${API_BASE_URL}/api/v1/health` : '/api/v1/health';

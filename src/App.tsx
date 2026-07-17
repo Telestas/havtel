@@ -3,12 +3,23 @@ import { usePhoneInput, defaultCountries, parseCountry } from 'react-internation
 import { isValidPhoneNumber } from 'libphonenumber-js';
 import { trackPageView, getStoredConsent, enableAnalytics, grantConsent, denyConsent } from './lib/analytics';
 import { setPageMeta, usePageMeta } from './hooks/usePageMeta';
-import { loadStripe } from '@stripe/stripe-js';
+import { loadStripe, type Stripe } from '@stripe/stripe-js';
 import { CheckoutElementsProvider, PaymentElement, useCheckout } from '@stripe/react-stripe-js/checkout';
+import { getPaymentConfigRequest } from './lib/api';
 
-const stripePromise = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY
-  ? loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string)
-  : null;
+// The publishable key is admin-configurable from the backoffice (Settings →
+// Payments) and is fetched at runtime rather than baked in at build time, so
+// rotating it never requires a new frontend build/deploy.
+let stripePromise: Promise<Stripe | null> | null = null;
+
+function getStripe(): Promise<Stripe | null> {
+  if (!stripePromise) {
+    stripePromise = getPaymentConfigRequest()
+      .then((config) => (config.stripe_publishable_key ? loadStripe(config.stripe_publishable_key) : null))
+      .catch(() => null);
+  }
+  return stripePromise;
+}
 import {
   Bookmark,
   ShoppingCart,
@@ -1485,7 +1496,7 @@ export default function App() {
           checkoutResponse ? (
             <CheckoutElementsProvider
               key="payment"
-              stripe={stripePromise}
+              stripe={getStripe()}
               options={{ clientSecret: checkoutResponse.client_secret }}
             >
               <PaymentView
