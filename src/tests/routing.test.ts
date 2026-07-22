@@ -70,6 +70,16 @@ describe('getRouteSnapshotFromPath', () => {
     );
   });
 
+  it('resolves confirmed path and extracts order id', () => {
+    expect(getRouteSnapshotFromPath('/checkout/confirmed/order-abc')).toEqual(
+      snap({ view: 'confirmed', trackedOrderId: 'order-abc' }),
+    );
+  });
+
+  it('resolves /checkout/confirmed without id', () => {
+    expect(getRouteSnapshotFromPath('/checkout/confirmed')).toEqual(snap({ view: 'confirmed' }));
+  });
+
   it('resolves unknown path to notfound', () => {
     expect(getRouteSnapshotFromPath('/this-does-not-exist').view).toBe('notfound');
   });
@@ -112,8 +122,18 @@ describe('buildPathFromRoute', () => {
     expect(buildPathFromRoute(snap({ view: 'tracking', trackedOrderId: null }))).toBe('/tracking');
   });
 
+  it('builds confirmed path with order id', () => {
+    expect(buildPathFromRoute(snap({ view: 'confirmed', trackedOrderId: 'abc-123' }))).toBe(
+      '/checkout/confirmed/abc-123',
+    );
+  });
+
+  it('builds /checkout/confirmed with no id', () => {
+    expect(buildPathFromRoute(snap({ view: 'confirmed', trackedOrderId: null }))).toBe('/checkout/confirmed');
+  });
+
   it('round-trips: buildPath(getSnapshot(path)) restores the path', () => {
-    const paths = ['/store', '/cart', '/login', '/signup', '/checkout/shipping', '/checkout/confirmed'];
+    const paths = ['/store', '/cart', '/login', '/signup', '/checkout/shipping', '/checkout/confirmed', '/checkout/confirmed/order-1'];
     for (const path of paths) {
       expect(buildPathFromRoute(getRouteSnapshotFromPath(path))).toBe(path);
     }

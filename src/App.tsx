@@ -790,6 +790,9 @@ export default function App() {
     const succeeded = redirectStatus === 'succeeded' || redirectStatus === null;
     if (succeeded) {
       setStripeReturnOrderId(pendingOrderId);
+      // Put the order id in the URL (/checkout/confirmed/:id) so a page
+      // refresh can re-fetch the order instead of spinning forever.
+      if (pendingOrderId) setTrackedOrderId(pendingOrderId);
       setView('confirmed');
     } else {
       setCheckoutError('Your payment was not completed and you were not charged. Please try again.');
@@ -842,6 +845,34 @@ export default function App() {
     }, 3000);
     return () => clearInterval(interval);
   }, [view, authSession?.access_token, latestOrder?.id, latestOrder?.status]);
+
+  // Reload recovery for /checkout/confirmed/:orderId — a page refresh wipes
+  // latestOrder and the one-shot sessionStorage key, but the order id survives
+  // in the URL, so re-fetch it once auth is hydrated instead of showing the
+  // "finalizing" spinner forever. The Stripe-return effect above owns the
+  // fetch while stripeReturnOrderId is pending.
+  useEffect(() => {
+    if (view !== 'confirmed' || latestOrder || stripeReturnOrderId) return;
+    if (!trackedOrderId || !authSession?.access_token) return;
+
+    const orderId = trackedOrderId;
+    const token = authSession.access_token;
+    let cancelled = false;
+
+    void (async () => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          const order = await getOrderRequest(token, orderId);
+          if (!cancelled) setLatestOrder(order);
+          return;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [view, latestOrder, stripeReturnOrderId, trackedOrderId, authSession?.access_token]);
 
   const requireAuthForView = (nextView: View) => {
     if (isAuthenticated) {
@@ -1159,6 +1190,7 @@ export default function App() {
     const token = authSession.access_token;
     const orderId = checkoutResponse.order_id;
     setCartItems([]);
+    setTrackedOrderId(orderId);
     setView('confirmed');
     // Payment already succeeded; retry so a transient fetch failure doesn't
     // leave the confirmation screen without the order (it shows a graceful

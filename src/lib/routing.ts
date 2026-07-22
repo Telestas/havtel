@@ -29,6 +29,11 @@ export const getRouteSnapshotFromPath = (pathname: string): RouteSnapshot => {
     return { view: 'tracking', productSlug: null, trackedOrderId: decodeURIComponent(trackingMatch[1]) };
   }
 
+  const confirmedMatch = path.match(/^\/checkout\/confirmed\/([^/]+)$/);
+  if (confirmedMatch) {
+    return { view: 'confirmed', productSlug: null, trackedOrderId: decodeURIComponent(confirmedMatch[1]) };
+  }
+
   switch (path) {
     case '/':                    return { view: 'home',      productSlug: null, trackedOrderId: null };
     case '/store':               return { view: 'shop',      productSlug: null, trackedOrderId: null };
@@ -64,7 +69,7 @@ export const buildPathFromRoute = ({ view, productSlug, trackedOrderId }: RouteS
     case 'preorder':  return '/preorder';
     case 'shipping':  return '/checkout/shipping';
     case 'payment':   return '/checkout/payment';
-    case 'confirmed': return '/checkout/confirmed';
+    case 'confirmed': return trackedOrderId ? `/checkout/confirmed/${encodeURIComponent(trackedOrderId)}` : '/checkout/confirmed';
     case 'login':     return '/login';
     case 'signup':    return '/signup';
     case 'forgot':    return '/forgot-password';
