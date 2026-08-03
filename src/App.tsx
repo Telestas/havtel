@@ -2873,7 +2873,7 @@ function ShippingView({
                         type="text"
                         value={taxExemptionInput}
                         onChange={(e) => onTaxExemptionInputChange(e.target.value)}
-                        placeholder="Enter certificate code"
+                        placeholder="Enter certificate code (e.g. 85-8012646263C-5)"
                         className="w-full rounded-[10px] border border-[#bcdcef] bg-white px-3 py-2 text-[14px] font-semibold text-[#1f6dad] outline-none focus:border-[#7eb7db]"
                       />
                       <button
@@ -5548,11 +5548,11 @@ function Shop({ products, categories, isLoading, onAddToCart, onProductSelect, o
                 >
                   <div className="relative rounded-t-[18px] border-b border-[#d6e7f0] bg-[radial-gradient(circle_at_top_left,#fff8de_0%,#ffffff_30%,#f3fbff_100%)] p-3">
                     {prod.isInStock ? (
-                      <span className="absolute right-3 top-3 rounded-full border border-[#d6e7f0] bg-[#f2f9fe] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-[#7aa6c2]">
+                      <span className="absolute right-3 top-3 z-10 rounded-full border border-[#d6e7f0] bg-[#f2f9fe] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-[#7aa6c2]">
                         In Stock
                       </span>
                     ) : (
-                      <span className="absolute right-3 top-3 rounded-full border border-[#f0d6d6] bg-[#fef2f2] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-[#bb5a42]">
+                      <span className="absolute right-3 top-3 z-10 rounded-full border border-[#f0d6d6] bg-[#fef2f2] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-[#bb5a42]">
                         Out of Stock
                       </span>
                     )}
